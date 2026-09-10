@@ -20,5 +20,18 @@
     "nodemailer": "^6.9.0",
     "ping": "^0.4.4",
     "socket.io": "^4.8.0"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/indianprogrammer/visualNMS.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/indianprogrammer/visualNMS/issues"
+  },
+  "homepage": "https://github.com/indianprogrammer/visualNMS#readme"
 }

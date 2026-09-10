@@ -148,7 +148,7 @@ document.getElementById('btn-save-dev').onclick=function(){
 // ═══ TOPOLOGY ═══
 function loadTopology() {
   api('/maps').then(function(maps){
-    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-primary" onclick="topoAddNode()"><i class="ti ti-plus"></i> Add Node</button><button class="btn btn-sm btn-secondary" onclick="topoLinkMode()"><i class="ti ti-link"></i> Link</button><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i> +</button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i> -</button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative"><div class="topology-container" id="cy-topo"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
+    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i> +</button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i> -</button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative"><div class="topology-container" id="cy-topo"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
     document.getElementById('topo-sel').onchange=function(e){if(e.target.value){selectedMapId=parseInt(e.target.value);document.getElementById('topo-tools').style.display='';loadMap(selectedMapId);}};
     if(maps.length){document.getElementById('topo-sel').value=maps[0].id;selectedMapId=maps[0].id;document.getElementById('topo-tools').style.display='';loadMap(maps[0].id);}
   });
@@ -180,6 +180,7 @@ function loadMap(mapId) {
     cy.nodes().forEach(renderNodeLabel);
     cy.fit(undefined, 60);
     cy.maxZoom(4); cy.minZoom(0.1);
+    (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:'rgba(148,163,184,0.45)',lineWidth:1,gridStackOrder:-1});})();
     cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);});
     var saveTimer=null;
     cy.on('drag','node',function(){_justDragged=true;});
@@ -289,4 +290,4 @@ function loadSettings(){
 }
 
 // ═══ BOOT ═══
-if (AUTH_TOKEN) { startApp().catch(function(){showLogin();}); } else { showLogin(); }
+if (AUTH_TOKEN) { try { startApp(); } catch(e){ showLogin(); } } else { showLogin(); }
