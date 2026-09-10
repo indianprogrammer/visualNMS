@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web-NMS</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler-vendors.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons@3.28.1/font/tabler-icons.min.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div id="login-root"></div>
+
+  <div class="page" id="app-root" style="display:none">
+    <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+      <div class="container-fluid">
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <h1 class="navbar-brand navbar-brand-autodark d-none-navbar-horizontal pe-0 pe-md-3">
+          <span style="font-size:1.1rem;color:#2fb344;font-weight:700">Web-NMS</span>
+        </h1>
+        <div class="collapse navbar-collapse" id="sidebar-menu">
+          <ul class="navbar-nav pt-lg-3" id="nav-menu">
+            <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="nav-icon ti ti-dashboard"></i><span class="nav-link-title">Dashboard</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="topology"><i class="nav-icon ti ti-network"></i><span class="nav-link-title">Topology</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="devices"><i class="nav-icon ti ti-server"></i><span class="nav-link-title">Devices</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="alerts"><i class="nav-icon ti ti-alert-triangle"></i><span class="nav-link-title">Alerts</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="discovery"><i class="nav-icon ti ti-scan"></i><span class="nav-link-title">Discovery</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="tools"><i class="nav-icon ti ti-tool"></i><span class="nav-link-title">Tools</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="logs"><i class="nav-icon ti ti-list"></i><span class="nav-link-title">Event Log</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="nav-icon ti ti-settings"></i><span class="nav-link-title">Settings</span></a></li>
+          </ul>
+          <div class="mt-auto pb-3 px-3"><button class="btn btn-ghost btn-sm w-100" id="btn-logout"><i class="ti ti-logout me-1"></i>Logout</button></div>
+        </div>
+      </div>
+    </aside>
+    <div class="page-wrapper">
+      <div class="page-header d-print-none"><div class="container-xl"><div class="page-pretitle">Web-NMS</div><h2 class="page-title" id="page-title">Dashboard</h2></div></div>
+      <div class="page-body"><div class="container-xl" id="page-content-container"><div id="page-content"></div></div></div>
+      <footer class="footer footer-transparent d-print-none"><div class="container-xl"><div class="row text-center align-items-center flex-row-reverse"><div class="col-lg-auto ms-lg-auto"><ul class="list-inline list-inline-dots mb-0"><li class="list-inline-item"><span class="link-secondary">Web-NMS v1.0</span></li></ul></div></div></div></footer>
+    </div>
+  </div>
+
+  <div class="modal modal-blur fade" id="modal-device" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="dev-modal-title">Add Device</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="df-id">
+      <div class="row mb-3"><div class="col-md-6"><label class="form-label">Name</label><input type="text" class="form-control" id="df-name"></div><div class="col-md-6"><label class="form-label">IP Address</label><input type="text" class="form-control" id="df-ip"></div></div>
+      <div class="row mb-3"><div class="col-md-4"><label class="form-label">Type</label><select class="form-select" id="df-type"><option value="generic">Generic</option><option value="router">Router</option><option value="switch">Switch</option><option value="server">Server</option><option value="wireless_ap">Wireless AP</option><option value="firewall">Firewall</option><option value="printer">Printer</option><option value="ont">ONT</option></select></div>
+      <div class="col-md-4"><label class="form-label">SNMP Version</label><select class="form-select" id="df-ver"><option value="2c">v2c</option><option value="1">v1</option><option value="3">v3</option></select></div>
+      <div class="col-md-4"><label class="form-label">SNMP Community</label><input type="text" class="form-control" id="df-comm" value="public"></div></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btn-save-dev">Save</button></div>
+  </div></div></div>
+
+  <div class="modal modal-blur fade" id="modal-map" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">New Map</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><label class="form-label">Title</label><input type="text" class="form-control" id="mf-title"></div>
+    <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btn-save-map">Create</button></div>
+  </div></div></div>
+
+  <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-box"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
