@@ -8,6 +8,16 @@ const tools = require('../tools/traceroute');
 
 const router = express.Router();
 
+function emitMap(mapId, change) {
+  try {
+    const io = require('../websocket/ws-server').getIO();
+    if (io) io.emit('map:updated', Object.assign({ mapId: parseInt(mapId) }, change));
+  } catch (e) {}
+}
+function fullNode(mapId, nodeId) {
+  return db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
+}
+
 // ── Auth ──
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body;
@@ -108,6 +118,7 @@ router.post('/maps/:id/nodes', requireAuth, (req, res) => {
   const b = req.body;
   const r = db.prepare('INSERT INTO map_nodes (map_id,device_id,sub_map_id,x_position,y_position,custom_label,icon_name) VALUES (?,?,?,?,?,?,?)').run(req.params.id, b.device_id||null, b.sub_map_id||null, b.x_position||100, b.y_position||100, b.custom_label||null, b.icon_name||null);
   res.status(201).json({ id: r.lastInsertRowid });
+  emitMap(req.params.id, { type: 'node-added', node: fullNode(req.params.id, r.lastInsertRowid) });
 });
 
 router.put('/maps/:mapId/nodes/:nodeId', requireAuth, (req, res) => {
@@ -123,11 +134,13 @@ router.put('/maps/:mapId/nodes/:nodeId', requireAuth, (req, res) => {
   p.push(req.params.nodeId, req.params.mapId);
   db.prepare(`UPDATE map_nodes SET ${sets.join(',')} WHERE id=? AND map_id=?`).run(...p);
   res.json({ message: 'Updated' });
+  emitMap(req.params.mapId, { type: 'node-moved', node: fullNode(req.params.mapId, req.params.nodeId) });
 });
 
 router.delete('/maps/:mapId/nodes/:nodeId', requireAuth, (req, res) => {
   db.prepare('DELETE FROM map_nodes WHERE id=? AND map_id=?').run(req.params.nodeId, req.params.mapId);
   res.json({ message: 'Deleted' });
+  emitMap(req.params.mapId, { type: 'node-deleted', id: parseInt(req.params.nodeId) });
 });
 
 router.post('/maps/:id/links', requireAuth, (req, res) => {
@@ -135,11 +148,13 @@ router.post('/maps/:id/links', requireAuth, (req, res) => {
   if (!b.source_node_id || !b.target_node_id) return res.status(400).json({ error: 'source and target required' });
   const r = db.prepare('INSERT INTO map_links (map_id,source_node_id,target_node_id,source_interface,target_interface,max_speed_bps) VALUES (?,?,?,?,?,?)').run(req.params.id, b.source_node_id, b.target_node_id, b.source_interface||null, b.target_interface||null, b.max_speed_bps||1000000000);
   res.status(201).json({ id: r.lastInsertRowid });
+  emitMap(req.params.id, { type: 'link-added', link: db.prepare('SELECT * FROM map_links WHERE id=?').get(r.lastInsertRowid) });
 });
 
 router.delete('/maps/:mapId/links/:linkId', requireAuth, (req, res) => {
   db.prepare('DELETE FROM map_links WHERE id=? AND map_id=?').run(req.params.linkId, req.params.mapId);
   res.json({ message: 'Deleted' });
+  emitMap(req.params.mapId, { type: 'link-deleted', id: parseInt(req.params.linkId) });
 });
 
 // ── Alerts ──

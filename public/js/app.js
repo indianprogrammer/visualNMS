@@ -22,6 +22,7 @@ function toast(msg, sev) {
   setTimeout(function(){ t.remove(); }, 5000);
 }
 function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+if(!window._tpmBound){window._tpmBound=true;document.addEventListener('mousedown',function(e){var m=document.getElementById('tpm-menu');if(m&&!m.contains(e.target))m.remove();},true);document.addEventListener('keydown',function(e){if(e.key==='Escape'){var m=document.getElementById('tpm-menu');if(m)m.remove();}});}
 function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',server:'ti ti-server',wireless_ap:'ti ti-antenna',firewall:'ti ti-shield',printer:'ti ti-printer',ont:'ti ti-cable'}[t]||'ti ti-device-desktop'; }
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
@@ -62,6 +63,7 @@ function connectSocket() {
     socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);});
     socket.on('alert:new',function(a){toast(a.severity.toUpperCase()+': '+a.message,a.severity);if(currentPage==='alerts')loadAlerts();});
     socket.on('discovery:complete',function(r){toast('Found '+r.devicesFound+' in '+r.subnet,'success');if(currentPage==='discovery')loadDiscovery();});
+    socket.on('map:updated',applyMapUpdate);
   } catch(e){}
 }
 function bindNav() {
@@ -142,13 +144,13 @@ document.getElementById('btn-save-dev').onclick=function(){
   var data={name:document.getElementById('df-name').value,ip_address:document.getElementById('df-ip').value,device_type:document.getElementById('df-type').value,snmp_version:document.getElementById('df-ver').value,snmp_community:document.getElementById('df-comm').value};
   if(!data.name||!data.ip_address){toast('Name and IP required','critical');return;}
   var p=id?api('/devices/'+id,{method:'PUT',body:data}):api('/devices',{method:'POST',body:data});
-  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');loadDevices();}).catch(function(){toast('Error','critical');});
+  p.then(function(r){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');if(!id&&r&&r.id&&window._pendingMapPos&&selectedMapId&&currentPage==='topology'){var pp=window._pendingMapPos;window._pendingMapPos=null;api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:pp.x,y_position:pp.y}}).then(function(){toast('Node added','success');loadMap(selectedMapId);});}else{window._pendingMapPos=null;loadDevices();}}).catch(function(){toast('Error','critical');});
 };
 
 // ═══ TOPOLOGY ═══
 function loadTopology() {
   api('/maps').then(function(maps){
-    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative"><div class="topology-container" id="cy-topo"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
+    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative" id="topo-wrap"><div class="topology-container" id="cy-topo"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
     document.getElementById('topo-sel').onchange=function(e){if(e.target.value){selectedMapId=parseInt(e.target.value);document.getElementById('topo-tools').style.display='';loadMap(selectedMapId);}};
     if(maps.length){document.getElementById('topo-sel').value=maps[0].id;selectedMapId=maps[0].id;document.getElementById('topo-tools').style.display='';loadMap(maps[0].id);}
   });
@@ -157,8 +159,8 @@ function loadMap(mapId) {
   api('/maps/'+mapId).then(function(md){
     if(cy){cy.destroy();cy=null;}
     var els=[];
-    md.nodes.forEach(function(n){els.push({data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',lat:n.ip_address?'--':'',statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_type||'generic'});});
-    md.links.forEach(function(l){els.push({data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,label:l.label||''},classes:'device-link'});});
+    md.nodes.forEach(function(n){els.push(topoNodeEl(n));});
+    md.links.forEach(function(l){els.push(topoLinkEl(l));});
     cy=cytoscape({container:document.getElementById('cy-topo'),elements:els,layout:{name:'preset'},zoom:1,minZoom:0.1,maxZoom:4,boxSelectionEnabled:false,autoungrabify:false,autounselectify:false,userZoomingEnabled:true,userPanningEnabled:true,style:[
       {selector:'node',style:{'label':'data(label)','background-color':'#22262e','border-color':'data(statusColor)','border-width':3,'width':150,'height':70,'font-size':'12px','color':'#c2c7d0','text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-color':'#1a1d23','text-outline-width':2,'cursor':'grab'}},
       {selector:'node:grabbed',style:{'cursor':'grabbing','border-width':3,'border-color':'#357bfd'}},
@@ -169,6 +171,9 @@ function loadMap(mapId) {
       {selector:'node.firewall',style:{'background-color':'#2c1416'}},
       {selector:'node.ont',style:{'background-color':'#102821'}},
       {selector:'node.generic',style:{'background-color':'#23262c'}},
+      {selector:'node.network',style:{'shape':'ellipse','background-color':'#152238','border-style':'dashed','border-color':'#5b8fd4'}},
+      {selector:'node.submap',style:{'background-color':'#1d2440','border-style':'double','border-color':'#7c8aff'}},
+      {selector:'node.static',style:{'background-color':'#23262c'}},
       {selector:'node.up',style:{'border-color':'#2fb344','box-shadow':'0 0 12px #2fb34455'}},
       {selector:'node.down',style:{'border-color':'#e53e3e'}},
       {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':'#868a91','text-background-color':'#1a1d23','text-background-opacity':0.8}},
@@ -176,12 +181,11 @@ function loadMap(mapId) {
       {selector:'.up',style:{'line-color':'#2fb344'}},
       {selector:':selected',style:{'border-width':3,'border-color':'#357bfd'}}
     ]});
-    cy.nodes().forEach(function(n){n.removeClass('down up');n.addClass(n.data('statusColor')==='#e53e3e'?'down':n.data('statusColor')==='#2fb344'?'up':'');});
-    cy.nodes().forEach(renderNodeLabel);
+    cy.nodes().forEach(topoStyleNode);
     cy.fit(undefined, 60);
     cy.maxZoom(4); cy.minZoom(0.1);
     (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:'rgba(148,163,184,0.45)',lineWidth:1,gridStackOrder:-1});})();
-    cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);});
+    cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);else{var sm=e.target.data('subMapId');if(sm)openSubMap(sm);}});
     cy.on('dblclick dbltap',function(e){
       if(e.target!==cy||!e.renderedPosition)return;
       var z0=cy.zoom(),z1=Math.min(4,z0*1.6),rp=e.renderedPosition,p0=cy.pan();
@@ -189,17 +193,102 @@ function loadMap(mapId) {
       cy.stop(true,false);
       cy.animate({zoom:z1,pan:{x:rp.x-m.x*z1,y:rp.y-m.y*z1}},{duration:200});
     });
+    cy.on('cxttap',function(e){
+      if(e.target!==cy||!e.position)return;
+      var oe=e.originalEvent,px=null,py=null;
+      var w=document.getElementById('topo-wrap');
+      if(oe&&oe.clientX!==undefined&&w){var r=w.getBoundingClientRect();px=oe.clientX-r.left;py=oe.clientY-r.top;}
+      else if(e.renderedPosition){px=e.renderedPosition.x;py=e.renderedPosition.y;}
+      else return;
+      showTopoMenu(px,py,e.position);
+    });
     var saveTimer=null;
     cy.on('drag','node',function(){_justDragged=true;});
     cy.on('dragfree','node',function(e){var n=e.target;var p=n.position();if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(function(){api('/maps/'+selectedMapId+'/nodes/'+n.data('mapNodeId'),{method:'PUT',body:{x_position:Math.round(p.x),y_position:Math.round(p.y)}}).catch(function(){});},400);});
   });
 }
 var _linkMode=false,_linkSrc=null,_justDragged=false;
-function topoLinkMode(){_linkMode=!_linkMode;_linkSrc=null;toast(_linkMode?'Click source then target':'Link off','info');if(cy){cy.off('tap');cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);if(!_linkMode)return;var nid=e.target.id();if(!_linkSrc){_linkSrc=nid;toast('Source selected','info');}else if(nid!==_linkSrc){var sn=cy.getElementById(_linkSrc).data('mapNodeId');var tn=e.target.data('mapNodeId');api('/maps/'+selectedMapId+'/links',{method:'POST',body:{source_node_id:sn,target_node_id:tn}}).then(function(){toast('Link created','success');loadMap(selectedMapId);});_linkSrc=null;_linkMode=false;}});}}
+function hideTopoMenu(){var m=document.getElementById('tpm-menu');if(m)m.remove();}
+function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
+function topoMenuMain(m,pos){
+  m.innerHTML='<button class="tpm-item" data-act="device">+ Add device</button><button class="tpm-item" data-act="network">+ Add Network</button><button class="tpm-item" data-act="submap">+ Add Submap</button><button class="tpm-item" data-act="static">+ Add Static</button><button class="tpm-item" data-act="link">+ Add Link</button>';
+}
+function topoMenuAddNode(kind,label,extra,pos,m){
+  var body={x_position:Math.round(pos.x),y_position:Math.round(pos.y),custom_label:label,icon_name:kind};
+  if(extra)for(var k in extra)body[k]=extra[k];
+  api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:body}).then(function(){hideTopoMenu();toast('Added','success');loadMap(selectedMapId);});
+}
+function showTopoMenu(px,py,pos){
+  hideTopoMenu();
+  var w=document.getElementById('topo-wrap');if(!w||!pos)return;
+  var r=w.getBoundingClientRect();
+  var m=document.createElement('div');m.id='tpm-menu';m.className='tpm-menu';
+  m.style.left=Math.min(Math.max(0,px),Math.max(0,r.width-230))+'px';
+  m.style.top=Math.min(Math.max(0,py),Math.max(0,r.height-280))+'px';
+  topoMenuMain(m,pos);
+  m.onclick=function(ev){
+    var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
+    if(b.hasAttribute('data-mid')){
+      var mid=parseInt(b.getAttribute('data-mid'));
+      topoMenuAddNode('submap',b.textContent,{sub_map_id:mid},pos,m);return;
+    }
+    var act=b.getAttribute('data-act');if(!act)return;
+    if(act==='__back'){topoMenuMain(m,pos);return;}
+    if(act==='device'){window._pendingMapPos={x:Math.round(pos.x),y:Math.round(pos.y)};hideTopoMenu();openDevModal();return;}
+    if(act==='link'){hideTopoMenu();if(!_linkMode)topoLinkMode();else toast('Click source then target','info');return;}
+    if(act==='go-network'){
+      var nm=m.querySelector('#tpm-name').value.trim(),cidr=m.querySelector('#tpm-cidr').value.trim();
+      if(!nm){toast('Name required','critical');return;}
+      topoMenuAddNode('network',nm+(cidr?'\n'+cidr:''),null,pos,m);return;
+    }
+    if(act==='go-static'){
+      var lb=m.querySelector('#tpm-name').value.trim(),ic=m.querySelector('#tpm-icon').value;
+      if(!lb){toast('Label required','critical');return;}
+      topoMenuAddNode(ic,lb,null,pos,m);return;
+    }
+    if(act==='network'){
+      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Network name" autocomplete="off"><input id="tpm-cidr" placeholder="CIDR e.g. 192.168.1.0/24" autocomplete="off"><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-network">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
+    }
+    if(act==='static'){
+      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Label" autocomplete="off"><select id="tpm-icon"><option value="generic">Generic</option><option value="router">Router</option><option value="switch">Switch</option><option value="server">Server</option><option value="wireless_ap">Wireless AP</option><option value="firewall">Firewall</option></select><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-static">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
+    }
+    if(act==='submap'){
+      api('/maps').then(function(maps){
+        maps=maps.filter(function(x){return x.id!==selectedMapId;});
+        if(!maps.length){toast('No other maps yet','critical');return;}
+        m.innerHTML='<div class="tpm-form">'+maps.map(function(x){return '<button class="tpm-item" data-mid="'+x.id+'">'+esc(x.title)+'</button>';}).join('')+'<button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';
+      });return;
+    }
+  };
+  w.appendChild(m);
+}
+function topoLinkMode(){_linkMode=!_linkMode;_linkSrc=null;toast(_linkMode?'Click source then target':'Link off','info');if(cy){cy.off('tap');cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);else{var sm2=e.target.data('subMapId');if(sm2&&!_linkMode){openSubMap(sm2);return;}}if(!_linkMode)return;var nid=e.target.id();if(!_linkSrc){_linkSrc=nid;toast('Source selected','info');}else if(nid!==_linkSrc){var sn=cy.getElementById(_linkSrc).data('mapNodeId');var tn=e.target.data('mapNodeId');api('/maps/'+selectedMapId+'/links',{method:'POST',body:{source_node_id:sn,target_node_id:tn}}).then(function(){toast('Link created','success');loadMap(selectedMapId);});_linkSrc=null;_linkMode=false;}});}}
 function topoAddNode(){api('/devices').then(function(devs){var pl=document.getElementById('topo-palette');document.getElementById('palette-list').innerHTML=devs.map(function(d){return '<div class="palette-item" title="'+esc(d.name)+'" onclick="addNode('+selectedMapId+','+d.id+')"><div class="device-icon '+d.device_type+'" style="width:28px;height:28px;font-size:.7rem"><i class="'+iconCls(d.device_type)+'"></i></div></div>';}).join('');pl.classList.add('visible');});}
 function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
+function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',lat:n.ip_address?'--':'',statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):(n.icon_name||'static')};}
+function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,label:l.label||''},classes:'device-link'};}
+function topoStyleNode(n){n.removeClass('down up');n.addClass(n.data('statusColor')==='#e53e3e'?'down':n.data('statusColor')==='#2fb344'?'up':'');renderNodeLabel(n);}
+function applyMapUpdate(u){
+  if(!u||!cy||currentPage!=='topology'||u.mapId!==selectedMapId)return;
+  var t=u.type;
+  if(t==='node-added'&&u.node){
+    if(cy.getElementById('n-'+u.node.id).length)return;
+    var added=cy.add(topoNodeEl(u.node));topoStyleNode(added);cy.resize();
+  }else if(t==='node-moved'&&u.node){
+    var mv=cy.getElementById('n-'+u.node.id);
+    if(mv.length&&!mv.grabbed())mv.position({x:u.node.x_position,y:u.node.y_position});
+  }else if(t==='node-deleted'&&u.id){
+    cy.remove(cy.getElementById('n-'+u.id));
+  }else if(t==='link-added'&&u.link){
+    if(cy.getElementById('l-'+u.link.id).length)return;
+    if(cy.getElementById('n-'+u.link.source_node_id).length&&cy.getElementById('n-'+u.link.target_node_id).length)cy.add(topoLinkEl(u.link));
+  }else if(t==='link-deleted'&&u.id){
+    cy.remove(cy.getElementById('l-'+u.id));
+  }
+}
 function renderNodeLabel(n){
+  if(!n.data('deviceId')){n.data('label',n.data('name'));return;}
   var lat=n.data('lat');
   var status=n.data('statusColor')==='#e53e3e'?'DOWN':(lat==='--'?'':'UP');
   var statusLine=status?('<span>'+status+'</span>'):'';
