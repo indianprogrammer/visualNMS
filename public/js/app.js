@@ -182,6 +182,13 @@ function loadMap(mapId) {
     cy.maxZoom(4); cy.minZoom(0.1);
     (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:'rgba(148,163,184,0.45)',lineWidth:1,gridStackOrder:-1});})();
     cy.on('tap','node',function(e){if(_justDragged){_justDragged=false;return;}var did=e.target.data('deviceId');if(did)viewDevice(did);});
+    cy.on('dblclick dbltap',function(e){
+      if(e.target!==cy||!e.renderedPosition)return;
+      var z0=cy.zoom(),z1=Math.min(4,z0*1.6),rp=e.renderedPosition,p0=cy.pan();
+      var m={x:(rp.x-p0.x)/z0,y:(rp.y-p0.y)/z0};
+      cy.stop(true,false);
+      cy.animate({zoom:z1,pan:{x:rp.x-m.x*z1,y:rp.y-m.y*z1}},{duration:200});
+    });
     var saveTimer=null;
     cy.on('drag','node',function(){_justDragged=true;});
     cy.on('dragfree','node',function(e){var n=e.target;var p=n.position();if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(function(){api('/maps/'+selectedMapId+'/nodes/'+n.data('mapNodeId'),{method:'PUT',body:{x_position:Math.round(p.x),y_position:Math.round(p.y)}}).catch(function(){});},400);});
