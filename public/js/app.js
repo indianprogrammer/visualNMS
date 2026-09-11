@@ -355,7 +355,7 @@ function showTopoElMenu(px,py,el){
     if(act==='tool-snmp'&&did){hideTopoMenu();runTopoTool('SNMP poller - '+el.data('name'),api('/devices/'+did+'/snmp').then(function(r){
       if(!r||r.error)return 'SNMP query failed'+(r&&r.error?': '+r.error:'')+'\nCheck community/credentials and that the device allows SNMP.';
       var L=['Target : '+(r.ip||el.data('ip')),'Name   : '+(r.sysName||'-'),'Descr  : '+(r.sysDescr||'-'),'CPU    : '+(r.cpuLoad!=null?r.cpuLoad+' %':'-'),'Memory : '+(r.memoryPct!=null?r.memoryPct+' %':'-'),'Time   : '+(r.timestamp||'-'),'','Interfaces ('+(r.interfaces?r.interfaces.length:0)+'):'];
-      (r.interfaces||[]).forEach(function(i){L.push('  #'+i.if_index+' '+i.if_name+'  oper='+i.if_oper_status+'  speed='+(i.if_speed||0));});
+      (r.interfaces||[]).forEach(function(i){var op=i.if_oper_status==1?'up':(i.if_oper_status==2?'down':'?');L.push('  #'+i.if_index+' '+i.if_name+'  '+op+'  '+fmtS(i.if_speed||0)+'  rx='+fmtB(i.if_in_octets||0)+' tx='+fmtB(i.if_out_octets||0));});
       return L.join('\n');
     }));return;}
     if(act==='tool-ports'&&did){hideTopoMenu();runTopoTool('Port Scanner - '+el.data('name'),api('/tools/portscan/'+encodeURIComponent(el.data('ip'))).then(function(r){

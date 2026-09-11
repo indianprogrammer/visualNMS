@@ -7,6 +7,8 @@ const OIDS = {
   sysName: '1.3.6.1.2.1.1.5.0',
   sysUpTime: '1.3.6.1.2.1.1.3.0',
   ifNumber: '1.3.6.1.2.1.2.1.0',
+  ifTable: '1.3.6.1.2.1.2.2',
+  hrStorage: '1.3.6.1.2.1.25.2.3',
   ifDescr: '1.3.6.1.2.1.2.2.1.2',
   ifType: '1.3.6.1.2.1.2.2.1.3',
   ifSpeed: '1.3.6.1.2.1.2.2.1.5',
@@ -54,14 +56,24 @@ function snmpGet(session, oid) {
 function snmpWalk(session, oid) {
   return new Promise((resolve, reject) => {
     const results = [];
-    session.walk(oid, 20, (err, varbinds) => {
-      if (err) return reject(err);
+    // NOTE: net-snmp feedCb receives ONLY the varbinds array (no err arg);
+    // a truthy return value STOPS the walk. net-snmp walks past the
+    // requested subtree, so filter to it and stop at its end.
+    const prefix = oid + '.';
+    const feedCb = (varbinds) => {
+      let outside = false;
       for (const vb of varbinds || []) {
+        if (typeof vb.oid !== 'string' || (vb.oid !== oid && !vb.oid.startsWith(prefix))) { outside = true; continue; }
         if (vb.type !== snmp.ObjectType.NoSuchObject && vb.type !== snmp.ObjectType.NoSuchInstance) {
           results.push({ oid: vb.oid, value: vb.value });
         }
       }
-    }, (err) => { if (err) reject(err); else resolve(results); });
+      return outside;
+    };
+    session.walk(oid, 20, feedCb, (err) => {
+      if (err && results.length === 0) reject(err);
+      else resolve(results);
+    });
   });
 }
 
@@ -98,13 +110,8 @@ async function pollDevice(device) {
   } catch {}
 
   try {
-    const [d,t,s,o,a,i,o2,e,e2] = await Promise.all([
-      snmpWalk(session, OIDS.ifDescr), snmpWalk(session, OIDS.ifType), snmpWalk(session, OIDS.ifSpeed),
-      snmpWalk(session, OIDS.ifOperStatus), snmpWalk(session, OIDS.ifAdminStatus),
-      snmpWalk(session, OIDS.ifInOctets), snmpWalk(session, OIDS.ifOutOctets),
-      snmpWalk(session, OIDS.ifInErrors), snmpWalk(session, OIDS.ifOutErrors)
-    ]);
-    result.interfaces = extractInterfaces([...d,...t,...s,...o,...a,...i,...o2,...e,...e2]);
+    const ifWalk = await snmpWalk(session, OIDS.ifTable);
+    result.interfaces = extractInterfaces(ifWalk);
   } catch {}
 
   try {
@@ -113,15 +120,15 @@ async function pollDevice(device) {
   } catch {}
 
   try {
-    const [used, size, descr] = await Promise.all([
-      snmpWalk(session, OIDS.hrStorageUsed).catch(()=>[]),
-      snmpWalk(session, OIDS.hrStorageSize).catch(()=>[]),
-      snmpWalk(session, OIDS.hrStorageDescr).catch(()=>[])
-    ]);
+    const stor = await snmpWalk(session, OIDS.hrStorage).catch(()=>[]);
     const um = {}, sm = {}, dm = {};
-    used.forEach(x => { um[x.oid.split('.').pop()] = Number(x.value)||0; });
-    size.forEach(x => { sm[x.oid.split('.').pop()] = Number(x.value)||0; });
-    descr.forEach(x => { dm[x.oid.split('.').pop()] = x.value?.toString()||''; });
+    for (const x of stor) {
+      const m = x.oid.match(/\.25\.2\.3\.1\.(\d+)\.(\d+)$/);
+      if (!m) continue;
+      if (m[1] === '3') dm[m[2]] = x.value?.toString() || '';
+      else if (m[1] === '5') sm[m[2]] = Number(x.value) || 0;
+      else if (m[1] === '6') um[m[2]] = Number(x.value) || 0;
+    }
     for (const i of Object.keys(sm)) {
       if (dm[i] && (dm[i].toLowerCase().includes('ram') || dm[i].toLowerCase().includes('memory') || i === '1')) {
         const total = sm[i] * 1024;
