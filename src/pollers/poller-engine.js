@@ -122,14 +122,29 @@ function checkAlertRules(results) {
   }
 }
 
+function effPingMs() { return db.getSetting('ping_interval_ms', config.poller.pingIntervalMs); }
+function effSnmpMs() { return db.getSetting('snmp_interval_ms', config.poller.snmpIntervalMs); }
+
+function armTimers() {
+  if (interval) { clearInterval(interval); interval = null; }
+  if (snmpInterval) { clearInterval(snmpInterval); snmpInterval = null; }
+  interval = setInterval(() => pingCycles().catch(e => console.error('[Poller] Ping error:', e.message)), effPingMs());
+  snmpInterval = setInterval(() => fullPoll().catch(e => console.error('[Poller] SNMP error:', e.message)), effSnmpMs());
+}
+
 function start() {
   if (running) return;
   running = true;
-  console.log(`[Poller] Ping cycle: ${config.poller.pingIntervalMs}ms | SNMP cycle: ${config.poller.snmpIntervalMs}ms`);
+  console.log(`[Poller] Ping cycle: ${effPingMs()}ms | SNMP cycle: ${effSnmpMs()}ms`);
   pingCycles().catch(e => console.error('[Poller] Initial ping error:', e.message));
   fullPoll().catch(e => console.error('[Poller] Initial snmp error:', e.message));
-  interval = setInterval(() => pingCycles().catch(e => console.error('[Poller] Ping error:', e.message)), config.poller.pingIntervalMs);
-  snmpInterval = setInterval(() => fullPoll().catch(e => console.error('[Poller] SNMP error:', e.message)), config.poller.snmpIntervalMs);
+  armTimers();
+}
+
+function applyIntervals() {
+  if (!running) return;
+  armTimers();
+  console.log(`[Poller] Intervals updated: ping ${effPingMs()}ms | SNMP ${effSnmpMs()}ms`);
 }
 
 function stop() {
@@ -138,4 +153,4 @@ function stop() {
   running = false;
 }
 
-module.exports = { setIO, pingCycles, fullPoll, start, stop };
+module.exports = { setIO, pingCycles, fullPoll, start, stop, applyIntervals, effPingMs, effSnmpMs };

@@ -13,9 +13,9 @@ module.exports = {
   poller: {
     intervalMs: parseInt(process.env.POLL_INTERVAL) || 10000,
     pingIntervalMs: parseInt(process.env.PING_INTERVAL) || 5000,
-    snmpIntervalMs: parseInt(process.env.SNMP_INTERVAL) || 60000,
+    snmpIntervalMs: parseInt(process.env.SNMP_INTERVAL) || 5000,
     pingTimeoutMs: 3000,
-    snmpTimeoutMs: 1500,
+    snmpTimeoutMs: 3000,
     snmpRetries: 0
   },
   syslog: { port: parseInt(process.env.SYSLOG_PORT) || 1514 },

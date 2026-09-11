@@ -269,6 +269,30 @@ router.delete('/snmp-profiles/:id', requireAuth, (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ── Settings ──
+router.get('/settings', requireAuth, (req, res) => {
+  const pollerEngine = require('../pollers/poller-engine');
+  res.json({ snmp_interval_ms: pollerEngine.effSnmpMs(), ping_interval_ms: pollerEngine.effPingMs() });
+});
+
+router.put('/settings', requireAuth, (req, res) => {
+  const parseMs = (v) => { const n = parseInt(v); return (isNaN(n) || n < 2000 || n > 3600000) ? null : n; };
+  const b = req.body || {};
+  if (b.snmp_interval_ms !== undefined) {
+    const v = parseMs(b.snmp_interval_ms);
+    if (v === null) return res.status(400).json({ error: 'snmp_interval_ms must be 2000-3600000' });
+    db.setSetting('snmp_interval_ms', v);
+  }
+  if (b.ping_interval_ms !== undefined) {
+    const v = parseMs(b.ping_interval_ms);
+    if (v === null) return res.status(400).json({ error: 'ping_interval_ms must be 2000-3600000' });
+    db.setSetting('ping_interval_ms', v);
+  }
+  const pollerEngine = require('../pollers/poller-engine');
+  pollerEngine.applyIntervals();
+  res.json({ message: 'Updated', settings: { snmp_interval_ms: pollerEngine.effSnmpMs(), ping_interval_ms: pollerEngine.effPingMs() } });
+});
+
 // ── Events ──
 router.get('/events', requireAuth, (req, res) => {
   let sql = 'SELECT e.*,d.name as device_name FROM event_log e LEFT JOIN devices d ON e.device_id=d.id WHERE 1=1';

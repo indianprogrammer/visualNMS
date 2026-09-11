@@ -53,7 +53,7 @@ function snmpGet(session, oid) {
   });
 }
 
-function snmpWalk(session, oid) {
+function snmpWalk(session, oid, maxRep = 50) {
   return new Promise((resolve, reject) => {
     const results = [];
     // NOTE: net-snmp feedCb receives ONLY the varbinds array (no err arg);
@@ -70,7 +70,7 @@ function snmpWalk(session, oid) {
       }
       return outside;
     };
-    session.walk(oid, 20, feedCb, (err) => {
+    session.walk(oid, maxRep, feedCb, (err) => {
       if (err && results.length === 0) reject(err);
       else resolve(results);
     });
@@ -110,8 +110,16 @@ async function pollDevice(device) {
   } catch {}
 
   try {
-    const ifWalk = await snmpWalk(session, OIDS.ifTable);
-    result.interfaces = extractInterfaces(ifWalk);
+    // Only columns the UI actually uses (ifType/ifAdminStatus are never displayed)
+    const parts = await Promise.allSettled([
+      snmpWalk(session, OIDS.ifDescr), snmpWalk(session, OIDS.ifSpeed),
+      snmpWalk(session, OIDS.ifOperStatus),
+      snmpWalk(session, OIDS.ifInOctets), snmpWalk(session, OIDS.ifOutOctets),
+      snmpWalk(session, OIDS.ifInErrors), snmpWalk(session, OIDS.ifOutErrors)
+    ]);
+    const varbinds = [];
+    for (const p of parts) if (p.status === 'fulfilled') varbinds.push(...p.value);
+    result.interfaces = extractInterfaces(varbinds);
   } catch {}
 
   try {
@@ -142,13 +150,21 @@ async function pollDevice(device) {
 }
 
 function saveInterfaces(deviceId, interfaces) {
-  const upsert = db.prepare(`INSERT INTO interfaces (device_id,if_index,if_name,if_type,if_speed,if_oper_status,if_admin_status,if_in_octets,if_out_octets,if_in_errors,if_out_errors,last_updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(device_id,if_index) DO UPDATE SET if_name=excluded.if_name,if_type=excluded.if_type,if_speed=excluded.if_speed,if_oper_status=excluded.if_oper_status,if_admin_status=excluded.if_admin_status,if_in_octets=excluded.if_in_octets,if_out_octets=excluded.if_out_octets,if_in_errors=excluded.if_in_errors,if_out_errors=excluded.if_out_errors,last_updated=datetime('now')`);
+  const ensure = db.prepare(`INSERT OR IGNORE INTO interfaces (device_id,if_index) VALUES (?,?)`);
   const metric = db.prepare(`INSERT INTO metric_history (device_id,metric_type,interface_name,value) VALUES (?,?,?,?)`);
+  const cols = ['if_name','if_type','if_speed','if_oper_status','if_admin_status','if_in_octets','if_out_octets','if_in_errors','if_out_errors'];
   const txn = db.transaction(() => {
     for (const i of interfaces) {
-      upsert.run(deviceId, i.if_index, i.if_name||'', i.if_type||0, i.if_speed||0, i.if_oper_status||0, i.if_admin_status||0, i.if_in_octets||0, i.if_out_octets||0, i.if_in_errors||0, i.if_out_errors||0);
-      if (i.if_in_octets) metric.run(deviceId, 'interface_rx', i.if_name, i.if_in_octets);
-      if (i.if_out_octets) metric.run(deviceId, 'interface_tx', i.if_name, i.if_out_octets);
+      // Never store a row we can't show status for — a missing oper status
+      // (timed-out walk) must not overwrite good data with 0 (= Down).
+      if (i.if_oper_status === undefined) continue;
+      ensure.run(deviceId, i.if_index);
+      const sets = [], vals = [];
+      for (const c of cols) if (i[c] !== undefined) { sets.push(c + '=?'); vals.push(i[c]); }
+      sets.push("last_updated=datetime('now')");
+      db.prepare(`UPDATE interfaces SET ${sets.join(',')} WHERE device_id=? AND if_index=?`).run(...vals, deviceId, i.if_index);
+      if (i.if_name && i.if_in_octets) metric.run(deviceId, 'interface_rx', i.if_name, i.if_in_octets);
+      if (i.if_name && i.if_out_octets) metric.run(deviceId, 'interface_tx', i.if_name, i.if_out_octets);
     }
   });
   txn();

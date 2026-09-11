@@ -175,6 +175,13 @@ CREATE TABLE IF NOT EXISTS snmp_profiles (
 );
 INSERT OR IGNORE INTO snmp_profiles (id,name,snmp_version,snmp_community,snmp_port) VALUES (1,'Default v2c','2c','public',161);
 
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+INSERT OR IGNORE INTO settings (key,value) VALUES ('snmp_interval_ms','5000');
+INSERT OR IGNORE INTO settings (key,value) VALUES ('ping_interval_ms','5000');
+
 CREATE TABLE IF NOT EXISTS discovery_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   subnet TEXT NOT NULL,
@@ -186,5 +193,18 @@ CREATE TABLE IF NOT EXISTS discovery_jobs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 `);
+
+db.getSetting = function (key, fallback) {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    if (!row || row.value === null || row.value === undefined || row.value === '') return fallback;
+    const n = parseInt(row.value);
+    return isNaN(n) ? fallback : n;
+  } catch (e) { return fallback; }
+};
+
+db.setSetting = function (key, value) {
+  db.prepare(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value));
+};
 
 module.exports = db;
