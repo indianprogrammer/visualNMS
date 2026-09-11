@@ -168,7 +168,7 @@ document.getElementById('btn-save-dev').onclick=function(){
   var data={name:document.getElementById('df-name').value,ip_address:document.getElementById('df-ip').value,device_type:document.getElementById('df-type').value,snmp_version:document.getElementById('df-ver').value,snmp_community:document.getElementById('df-comm').value,snmp_port:parseInt(document.getElementById('df-port').value)||161,snmp_user:document.getElementById('df-user').value||null,snmp_auth_protocol:document.getElementById('df-authp').value,snmp_auth_pass:document.getElementById('df-authpw').value||null,snmp_priv_protocol:document.getElementById('df-privp').value,snmp_priv_pass:document.getElementById('df-privpw').value||null};
   if(!data.name||!data.ip_address){toast('Name and IP required','critical');return;}
   var p=id?api('/devices/'+id,{method:'PUT',body:data}):api('/devices',{method:'POST',body:data});
-  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');loadDevices();}).catch(function(){toast('Error','critical');});
+  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');if(currentPage==='topology'&&selectedMapId){loadMap(selectedMapId);}else{loadDevices();}}).catch(function(){toast('Error','critical');});
 };
 
 // ═══ TOPOLOGY ═══
@@ -218,13 +218,14 @@ function loadMap(mapId) {
       cy.animate({zoom:z1,pan:{x:rp.x-m.x*z1,y:rp.y-m.y*z1}},{duration:200});
     });
     cy.on('cxttap',function(e){
-      if(e.target!==cy||!e.position)return;
+      if(!e.position)return;
       var oe=e.originalEvent,px=null,py=null;
       var w=document.getElementById('topo-wrap');
       if(oe&&oe.clientX!==undefined&&w){var r=w.getBoundingClientRect();px=oe.clientX-r.left;py=oe.clientY-r.top;}
       else if(e.renderedPosition){px=e.renderedPosition.x;py=e.renderedPosition.y;}
       else return;
-      showTopoMenu(px,py,e.position);
+      if(e.target===cy)showTopoMenu(px,py,e.position);
+      else if(e.target.isNode&&e.target.isNode())showTopoElMenu(px,py,e.target);
     });
     var saveTimer=null;
     cy.on('drag','node',function(){_justDragged=true;});
@@ -234,6 +235,42 @@ function loadMap(mapId) {
 var _linkMode=false,_linkSrc=null,_justDragged=false;
 function hideTopoMenu(){var m=document.getElementById('tpm-menu');if(m)m.remove();}
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
+function showTopoElMenu(px,py,el){
+  hideTopoMenu();
+  var w=document.getElementById('topo-wrap');if(!w||!el)return;
+  var r=w.getBoundingClientRect();
+  var m=document.createElement('div');m.id='tpm-menu';m.className='tpm-menu';
+  m.style.left=Math.min(Math.max(0,px),Math.max(0,r.width-230))+'px';
+  m.style.top=Math.min(Math.max(0,py),Math.max(0,r.height-200))+'px';
+  var did=el.data('deviceId'),nid=el.data('mapNodeId');
+  var h='';
+  if(did)h+='<button class="tpm-item" data-act="refresh">Refresh</button>';
+  h+='<button class="tpm-item" data-act="delete">Delete</button>';
+  h+='<button class="tpm-item" data-act="edit">Edit</button>';
+  m.innerHTML=h;
+  m.onclick=function(ev){
+    var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
+    var act=b.getAttribute('data-act');if(!act)return;
+    if(act==='refresh'&&did){hideTopoMenu();toast('Refreshing...','info');api('/devices/'+did+'/refresh',{method:'POST'}).then(function(rr){toast('Status: '+rr.status+(rr.latencyMs!=null?' '+rr.latencyMs+'ms':''),rr.status==='up'?'success':'critical');});return;}
+    if(act==='delete'){if(!confirm('Remove this element from the map?'))return;hideTopoMenu();api('/maps/'+selectedMapId+'/nodes/'+nid,{method:'DELETE'}).then(function(){toast('Removed','success');});return;}
+    if(act==='edit'){
+      if(did){hideTopoMenu();editDevice(did);return;}
+      var nm=String(el.data('name')||'').split('\n');
+      var isNet=el.hasClass('network');
+      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Label" autocomplete="off">'+(isNet?'<input id="tpm-cidr" placeholder="CIDR" autocomplete="off">':'')+'<button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-label">Save</button><button class="tpm-item tpm-back" data-act="__backel">‹ Back</button></div>';
+      m.querySelector('#tpm-name').value=nm[0]||'';
+      if(isNet)m.querySelector('#tpm-cidr').value=nm.slice(1).join(' ')||'';
+      return;
+    }
+    if(act==='__backel'){showTopoElMenu(px,py,el);return;}
+    if(act==='go-label'){
+      var lb=m.querySelector('#tpm-name').value.trim();if(!lb){toast('Label required','critical');return;}
+      var ci=m.querySelector('#tpm-cidr');if(ci&&ci.value.trim())lb+='\n'+ci.value.trim();
+      api('/maps/'+selectedMapId+'/nodes/'+nid,{method:'PUT',body:{custom_label:lb}}).then(function(){hideTopoMenu();toast('Updated','success');});return;
+    }
+  };
+  w.appendChild(m);
+}
 function topoMenuMain(m,pos){
   m.innerHTML='<button class="tpm-item" data-act="device">+ Add device</button><button class="tpm-item" data-act="network">+ Add Network</button><button class="tpm-item" data-act="submap">+ Add Submap</button><button class="tpm-item" data-act="static">+ Add Static</button><button class="tpm-item" data-act="link">+ Add Link</button>';
 }
@@ -311,7 +348,16 @@ function applyMapUpdate(u){
     var added=cy.add(topoNodeEl(u.node));topoStyleNode(added);cy.resize();
   }else if(t==='node-moved'&&u.node){
     var mv=cy.getElementById('n-'+u.node.id);
-    if(mv.length&&!mv.grabbed())mv.position({x:u.node.x_position,y:u.node.y_position});
+    if(mv.length){
+      if(!mv.grabbed())mv.position({x:u.node.x_position,y:u.node.y_position});
+      var nn=u.node.custom_label||u.node.device_name||('Node '+u.node.id);
+      if(mv.data('name')!==nn)mv.data('name',nn);
+      mv.data('statusColor',sColor(u.node.device_status||'unknown'));
+      topoStyleNode(mv);
+    }
+  }else if(t==='node-status'&&u.node){
+    var st=cy.getElementById('n-'+u.node.id);
+    if(st.length){st.data('statusColor',sColor(u.node.device_status||'unknown'));if(u.latencyMs!=null)st.data('lat',Math.round(u.latencyMs*10)/10);topoStyleNode(st);}
   }else if(t==='node-deleted'&&u.id){
     cy.remove(cy.getElementById('n-'+u.id));
   }else if(t==='link-added'&&u.link){

@@ -85,6 +85,43 @@ router.get('/devices/:id/ping', requireAuth, async (req, res) => {
   res.json(await pingPoller.pingHost(d.ip_address));
 });
 
+router.post('/devices/:id/refresh', requireAuth, async (req, res) => {
+  const d = db.prepare('SELECT * FROM devices WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  try {
+    const pingResult = await pingPoller.pingHost(d.ip_address);
+    const status = pingResult.reachable ? 'up' : 'down';
+    db.prepare(`UPDATE devices SET status=?, last_seen=datetime('now') WHERE id=?`).run(status, d.id);
+    let latency = null;
+    if (pingResult.reachable && pingResult.latencyMs != null) {
+      latency = Math.round(pingResult.latencyMs * 10) / 10;
+      db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`).run(d.id, 'ping', pingResult.latencyMs);
+      db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'ping', pingResult.latencyMs);
+    }
+    try {
+      if (d.snmp_community || d.snmp_version === '3') {
+        const snmpResult = await snmpPoller.pollDevice(d);
+        if (snmpResult && !snmpResult.error) {
+          if (snmpResult.interfaces && snmpResult.interfaces.length) snmpPoller.saveInterfaces(d.id, snmpResult.interfaces);
+          if (snmpResult.cpuLoad !== null && snmpResult.cpuLoad !== undefined) {
+            db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`).run(d.id, 'cpu', snmpResult.cpuLoad);
+            db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'cpu', snmpResult.cpuLoad);
+          }
+          if (snmpResult.memoryPct !== null && snmpResult.memoryPct !== undefined) {
+            db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`).run(d.id, 'memory', snmpResult.memoryPct);
+            db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'memory', snmpResult.memoryPct);
+          }
+        }
+      }
+    } catch (e) {}
+    const nodes = db.prepare('SELECT map_id, id FROM map_nodes WHERE device_id=?').all(d.id);
+    nodes.forEach(function (row) {
+      emitMap(row.map_id, { type: 'node-status', node: fullNode(row.map_id, row.id), latencyMs: latency });
+    });
+    res.json({ status: status, latencyMs: latency });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Maps ──
 router.get('/maps', requireAuth, (req, res) => {
   res.json(db.prepare('SELECT * FROM maps ORDER BY title').all());
