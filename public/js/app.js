@@ -297,6 +297,35 @@ document.getElementById('btn-ping-toggle').onclick=function(){
   else if(_pingTarget){runPingTool(_pingTarget.name,_pingTarget.did,_pingTarget.ip);}
 };
 document.getElementById('modal-ping').addEventListener('hidden.bs.modal',function(){_pingActive=false;_pingRun++;syncPingBtn();});
+var _mtrRun=0,_mtrActive=false;
+function syncToolStop(){document.getElementById('btn-tool-stop').style.display=_mtrActive?'':'none';}
+function mtrTable(ip,hops,round){
+  var h='<div class="small text-muted mb-2">HOST: '+esc(ip)+' &middot; round '+round+' &middot; stats over last 4 probes</div>';
+  h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>Hop</th><th>Host</th><th>Loss%</th><th>Snt</th><th>Last</th><th>Avg</th><th>Best</th><th>Wrst</th></tr></thead><tbody>';
+  hops.forEach(function(x){
+    h+='<tr><td>'+x.hop+'</td><td><code>'+esc(x.host)+'</code></td><td class="'+(x.loss>0?'text-danger':'text-success')+'">'+x.loss.toFixed(1)+'%</td><td>'+x.sent+'</td><td>'+x.last+'</td><td>'+x.avg+'</td><td>'+x.best+'</td><td>'+x.worst+'</td></tr>';
+  });
+  return h+'</tbody></table></div>';
+}
+function runMtrTool(name,ip){
+  var run=++_mtrRun;_mtrActive=true;
+  document.getElementById('tool-modal-title').textContent='Traceroute (MTR) - '+name;
+  syncToolStop();
+  new bootstrap.Modal(document.getElementById('modal-tool')).show();
+  mtrTick(ip,run,0);
+}
+function mtrTick(ip,run,round){
+  if(run!==_mtrRun||!_mtrActive)return;
+  if(round===0)document.getElementById('tool-out').textContent='Running...';
+  api('/tools/mtr/'+encodeURIComponent(ip)+'?cycles=4').then(function(r){
+    if(run!==_mtrRun||!_mtrActive)return;
+    if(!r||!r.hops||!r.hops.length){document.getElementById('tool-out').textContent='MTR to '+ip+' failed'+(r&&r.error?': '+r.error:'')+'.';_mtrActive=false;_mtrRun++;syncToolStop();return;}
+    document.getElementById('tool-out').innerHTML=mtrTable(ip,r.hops,round+1);
+    mtrTick(ip,run,round+1);
+  }).catch(function(){if(run!==_mtrRun||!_mtrActive)return;document.getElementById('tool-out').textContent='Request failed.';_mtrActive=false;_mtrRun++;syncToolStop();});
+}
+document.getElementById('btn-tool-stop').onclick=function(){_mtrActive=false;_mtrRun++;syncToolStop();};
+document.getElementById('modal-tool').addEventListener('hidden.bs.modal',function(){_mtrActive=false;_mtrRun++;syncToolStop();});
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
 function showTopoElMenu(px,py,el){
   hideTopoMenu();
@@ -317,12 +346,7 @@ function showTopoElMenu(px,py,el){
     var act=b.getAttribute('data-act');if(!act)return;
     if(act==='refresh'&&did){hideTopoMenu();toast('Refreshing...','info');api('/devices/'+did+'/refresh',{method:'POST'}).then(function(rr){toast('Status: '+rr.status+(rr.latencyMs!=null?' '+rr.latencyMs+'ms':''),rr.status==='up'?'success':'critical');});return;}
     if(act==='tool-ping'&&did){hideTopoMenu();runPingTool(el.data('name'),did,el.data('ip'));return;}
-    if(act==='tool-trace'&&did){hideTopoMenu();runTopoTool('Traceroute - '+el.data('name'),api('/tools/traceroute/'+encodeURIComponent(el.data('ip'))+'?hops=20').then(function(r){
-      if(!r||!r.completed||!r.hops||!r.hops.length)return 'Traceroute to '+el.data('ip')+' failed'+(r&&r.error?': '+r.error:'')+'.';
-      var L=['Traceroute to '+el.data('ip'),''];
-      r.hops.forEach(function(h){L.push('  '+h.hop+'  '+(h.ip||'*')+(h.avgMs!=null?'  '+Math.round(h.avgMs*10)/10+' ms':''));});
-      return L.join('\n');
-    }));return;}
+    if(act==='tool-trace'&&did){hideTopoMenu();runMtrTool(el.data('name'),el.data('ip'));return;}
     if(act==='tool-snmp'&&did){hideTopoMenu();runTopoTool('SNMP poller - '+el.data('name'),api('/devices/'+did+'/snmp').then(function(r){
       if(!r||r.error)return 'SNMP query failed'+(r&&r.error?': '+r.error:'')+'\nCheck community/credentials and that the device allows SNMP.';
       var L=['Target : '+(r.ip||el.data('ip')),'Name   : '+(r.sysName||'-'),'Descr  : '+(r.sysDescr||'-'),'CPU    : '+(r.cpuLoad!=null?r.cpuLoad+' %':'-'),'Memory : '+(r.memoryPct!=null?r.memoryPct+' %':'-'),'Time   : '+(r.timestamp||'-'),'','Interfaces ('+(r.interfaces?r.interfaces.length:0)+'):'];

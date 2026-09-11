@@ -44,4 +44,26 @@ function portScan(target, ports, timeoutMs = 2000) {
   });
 }
 
-module.exports = { traceroute, portScan };
+function parseMtrReport(stdout) {
+  const hops = [];
+  for (const line of String(stdout).split('\n')) {
+    const m = line.match(/^\s*(\d+)\.\|--\s+(\S+)\s+([\d.]+)%\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/);
+    if (m) hops.push({ hop: parseInt(m[1]), host: m[2], loss: parseFloat(m[3]), sent: parseInt(m[4]), last: parseFloat(m[5]), avg: parseFloat(m[6]), best: parseFloat(m[7]), worst: parseFloat(m[8]), stdev: parseFloat(m[9]) });
+  }
+  return hops;
+}
+
+async function mtr(target, cycles = 4) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(target || '')) return { target, hops: [], completed: false, error: 'Invalid target' };
+  const c = Math.min(Math.max(parseInt(cycles) || 4, 1), 20);
+  let stdout = '';
+  try {
+    ({ stdout } = await execAsync(`mtr --report --report-wide --report-cycles ${c} -i 1 -n ${target}`, { timeout: c * 5000 + 20000 }));
+  } catch (e) {
+    stdout = e.stdout || '';
+    if (!String(stdout).trim()) return { target, hops: [], completed: false, error: String((e.stderr || e.message || '')).trim().slice(0, 200) };
+  }
+  return { target, hops: parseMtrReport(stdout), completed: true };
+}
+
+module.exports = { traceroute, portScan, mtr };

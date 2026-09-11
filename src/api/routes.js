@@ -300,6 +300,11 @@ router.get('/tools/traceroute/:target', requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+router.get('/tools/mtr/:target', requireAuth, async (req, res) => {
+  try { res.json(await tools.mtr(req.params.target, parseInt(req.query.cycles) || 4)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get('/tools/portscan/:target', requireAuth, async (req, res) => {
   const ports = req.query.ports ? req.query.ports.split(',').map(Number) : [21,22,23,25,53,80,110,143,443,993,995,3306,3389,5432,8080,8443];
   try { res.json(await tools.portScan(req.params.target, ports)); }
