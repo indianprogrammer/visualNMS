@@ -209,7 +209,7 @@ h1,h2,h3,.page-title,.card-title,.navbar-brand{font-family:'Orbitron','Rajdhani'
 .topology-wrapper{display:flex;flex-direction:column;gap:0;margin-top:0}
 .topology-wrapper .topo-toolbar{padding:8px 16px;display:flex;justify-content:space-between;align-items:center;background:var(--nms-panel);border-bottom:1px solid var(--nms-border)}
 
-.topology-container{position:relative;z-index:0;width:100%;height:calc(100vh - 95px);min-height:400px;background-color:var(--nms-bg);background-image:linear-gradient(var(--nms-grid) 1px,transparent 1px),linear-gradient(90deg,var(--nms-grid) 1px,transparent 1px);background-size:40px 40px;border:none;border-radius:0;overflow:hidden}
+.topology-container{position:relative;z-index:0;width:100%;height:calc(100vh - 95px);min-height:400px;background-color:var(--nms-bg);border:none;border-radius:0;overflow:hidden}
 
 .chart-container{position:relative;height:250px;width:100%}
 

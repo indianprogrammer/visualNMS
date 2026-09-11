@@ -67,6 +67,7 @@ function thEdgeLabelBg(){return themeName()==='light'?'#ffffff':'#0a1120';}
 function thNetworkBg(){return themeName()==='light'?'#dbe7f5':'#152238';}
 function thSubmapBg(){return themeName()==='light'?'#e3e9f7':'#1d2440';}
 function thStaticBg(){return themeName()==='light'?'#64748b':'#3a4152';}
+function thMapGrid(){return themeName()==='light'?'rgba(90,110,135,0.4)':'rgba(148,163,184,0.28)';}
 function syncThemeBtn(){var n=themeDef(themeName()).name;document.querySelectorAll('.theme-name').forEach(function(b){b.textContent=n;});}
 function initTheme(){var t='dark';try{t=localStorage.getItem('webnms_theme')||'dark';}catch(e){}setTheme(t,true);}
 function setTheme(id,silent){var d=themeDef(id);try{localStorage.setItem('webnms_theme',d.id);}catch(e){}document.documentElement.setAttribute('data-theme',d.id);document.documentElement.setAttribute('data-bs-theme',d.bs);syncThemeBtn();if(!silent&&currentPage)refreshForTheme();}
@@ -308,7 +309,7 @@ function loadMap(mapId) {
     cy.edges().forEach(applyLinkStatus);
     cy.fit(undefined, 60);
     cy.maxZoom(4); cy.minZoom(0.1);
-    (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:'rgba(148,163,184,0.45)',lineWidth:1,gridStackOrder:-1});})();
+    (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:thMapGrid(),lineWidth:1,gridStackOrder:-1});})();
     bindTopoTap();
     cy.on('dblclick dbltap',function(e){
       if(e.target!==cy||!e.renderedPosition)return;
