@@ -4,16 +4,24 @@ const net = require('net');
 const execAsync = promisify(exec);
 
 async function traceroute(target, maxHops = 30) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(target || '')) return { target, hops: [], completed: false, error: 'Invalid target' };
+  const maxH = Math.min(Math.max(parseInt(maxHops) || 30, 1), 64);
+  let stdout = '';
   try {
-    const { stdout } = await execAsync(`traceroute -n -m ${maxHops} -w 2 ${target}`, { timeout: 30000 });
-    const lines = stdout.trim().split('\n').slice(1);
+    ({ stdout } = await execAsync(`traceroute -m ${maxH} -q 1 -w 2 ${target}`, { timeout: 90000 }));
+  } catch (e) {
+    stdout = e.stdout || '';
+    if (!String(stdout).trim()) return { target, hops: [], completed: false, error: String((e.stderr || e.message || '')).trim().slice(0, 200) };
+  }
+  try {
+    const lines = String(stdout).trim().split('\n').slice(1);
     const hops = lines.map(line => {
       const parts = line.trim().split(/\s+/);
       const hop = parseInt(parts[0]);
       const ips = parts.slice(1).filter(p => p !== '*' && /^\d+\.\d+\.\d+\.\d+$/.test(p));
       const times = parts.slice(1).filter(p => p !== '*' && /[\d.]+ms/.test(p)).map(t => parseFloat(t));
       return { hop, ip: ips[0] || '*', avgMs: times.length ? times.reduce((a,b)=>a+b,0)/times.length : null };
-    });
+    }).filter(h => !isNaN(h.hop));
     return { target, hops, completed: true };
   } catch (e) { return { target, hops: [], completed: false, error: e.message }; }
 }

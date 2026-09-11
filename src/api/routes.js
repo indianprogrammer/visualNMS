@@ -296,7 +296,7 @@ router.get('/tools/ping/:target', requireAuth, async (req, res) => {
 });
 
 router.get('/tools/traceroute/:target', requireAuth, async (req, res) => {
-  try { res.json(await tools.traceroute(req.params.target)); }
+  try { res.json(await tools.traceroute(req.params.target, parseInt(req.query.hops) || 30)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

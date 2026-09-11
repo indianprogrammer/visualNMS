@@ -82,6 +82,17 @@
     <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btn-save-snmp">Save</button></div>
   </div></div></div>
 
+  <div class="modal modal-blur fade" id="modal-ping" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="ping-modal-title">PING</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="d-flex gap-3 mb-2 small text-muted"><span>Sent: <b class="text-white" id="ping-sent">0</b></span><span>OK: <b class="text-success" id="ping-ok">0</b></span><span>Fail: <b class="text-danger" id="ping-fail">0</b></span><span>Loss: <b class="text-warning" id="ping-loss">0%</b></span><span>Avg: <b class="text-white" id="ping-avg">-</b></span></div>
+      <div class="progress mb-2" style="height:10px"><div id="ping-bar-ok" class="progress-bar bg-success" style="width:0%"></div><div id="ping-bar-fail" class="progress-bar bg-danger" style="width:0%"></div></div>
+      <div class="mb-2" style="height:150px"><canvas id="ping-chart"></canvas></div>
+      <pre class="tool-output" id="ping-out" style="max-height:220px;overflow-y:auto;margin:0"></pre>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" id="btn-ping-toggle">Stop</button><button class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div>
+  </div></div></div>
+
   <div class="modal modal-blur fade" id="modal-tool" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title" id="tool-modal-title">Tool</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body"><pre class="tool-output" id="tool-out" style="max-height:450px;overflow-y:auto;margin:0">Running...</pre></div>

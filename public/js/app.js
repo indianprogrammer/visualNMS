@@ -240,6 +240,63 @@ function runTopoTool(title,promise){
   new bootstrap.Modal(document.getElementById('modal-tool')).show();
   promise.then(function(out){document.getElementById('tool-out').textContent=out;}).catch(function(){document.getElementById('tool-out').textContent='Request failed.';});
 }
+var _pingRun=0,_pingActive=false,_pingStats=null,_pingTarget=null,_pingChart=null,_pingLabels=[],_pingLat=[];
+function pingChartPush(lat){
+  _pingLabels.push(new Date().toLocaleTimeString());
+  _pingLat.push(lat);
+  if(_pingLabels.length>60){_pingLabels.shift();_pingLat.shift();}
+  if(_pingChart){_pingChart.data.labels=_pingLabels.slice();_pingChart.data.datasets[0].data=_pingLat.slice();_pingChart.update('none');}
+}
+function pingChartInit(){
+  if(_pingChart){_pingChart.destroy();_pingChart=null;}
+  _pingLabels=[];_pingLat=[];
+  var c=document.getElementById('ping-chart');
+  if(c&&typeof Chart!=='undefined')_pingChart=new Chart(c,{type:'line',data:{labels:[],datasets:[{label:'ms',data:[],borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{display:false},y:{min:0,grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{display:false}}}});
+}
+function syncPingStats(){
+  var s=_pingStats||{sent:0,ok:0,fail:0,latSum:0};
+  document.getElementById('ping-sent').textContent=s.sent;
+  document.getElementById('ping-ok').textContent=s.ok;
+  document.getElementById('ping-fail').textContent=s.fail;
+  document.getElementById('ping-loss').textContent=(s.sent?Math.round(s.fail/s.sent*100):0)+'%';
+  document.getElementById('ping-avg').textContent=s.ok?(Math.round(s.latSum/s.ok*10)/10+' ms'):'-';
+  document.getElementById('ping-bar-ok').style.width=(s.sent?Math.round(s.ok/s.sent*100):0)+'%';
+  document.getElementById('ping-bar-fail').style.width=(s.sent?Math.round(s.fail/s.sent*100):0)+'%';
+}
+function syncPingBtn(){document.getElementById('btn-ping-toggle').textContent=_pingActive?'Stop':'Start';}
+function runPingTool(name,did,ip){
+  var run=++_pingRun;
+  _pingActive=true;_pingTarget={name:name,did:did,ip:ip};_pingStats={sent:0,ok:0,fail:0,latSum:0};
+  document.getElementById('ping-modal-title').textContent='PING - '+name+' ('+ip+')';
+  document.getElementById('ping-out').textContent='';
+  pingChartInit();
+  syncPingStats();syncPingBtn();
+  new bootstrap.Modal(document.getElementById('modal-ping')).show();
+  pingTick(did,ip,run);
+}
+function pingTick(did,ip,run){
+  if(run!==_pingRun)return;
+  api('/devices/'+did+'/ping').then(function(r){
+    if(run!==_pingRun)return;
+    _pingStats.sent++;
+    var out=document.getElementById('ping-out');
+    if(r&&r.reachable){_pingStats.ok++;if(r.latencyMs!=null)_pingStats.latSum+=r.latencyMs;pingChartPush(r.latencyMs!=null?r.latencyMs:null);out.textContent+='Reply from '+ip+': '+(r.latencyMs!=null?'time='+r.latencyMs+'ms':'ok')+'\n';}
+    else{_pingStats.fail++;pingChartPush(null);out.textContent+='Request timed out.\n';}
+    var lines=out.textContent.split('\n');if(lines.length>201)out.textContent=lines.slice(lines.length-201).join('\n');
+    out.scrollTop=out.scrollHeight;
+    syncPingStats();
+  }).catch(function(){
+    if(run!==_pingRun)return;
+    _pingStats.sent++;_pingStats.fail++;pingChartPush(null);
+    var out=document.getElementById('ping-out');out.textContent+='Request failed.\n';out.scrollTop=out.scrollHeight;
+    syncPingStats();
+  }).then(function(){if(run===_pingRun&&_pingActive)setTimeout(function(){pingTick(did,ip,run);},1000);});
+}
+document.getElementById('btn-ping-toggle').onclick=function(){
+  if(_pingActive){_pingActive=false;_pingRun++;syncPingBtn();}
+  else if(_pingTarget){runPingTool(_pingTarget.name,_pingTarget.did,_pingTarget.ip);}
+};
+document.getElementById('modal-ping').addEventListener('hidden.bs.modal',function(){_pingActive=false;_pingRun++;syncPingBtn();});
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
 function showTopoElMenu(px,py,el){
   hideTopoMenu();
@@ -253,13 +310,19 @@ function showTopoElMenu(px,py,el){
   if(did)h+='<button class="tpm-item" data-act="refresh">Refresh</button>';
   h+='<button class="tpm-item" data-act="delete">Delete</button>';
   h+='<button class="tpm-item" data-act="edit">Edit</button>';
-  if(did)h+='<div class="tpm-sep"></div><button class="tpm-item" data-act="tool-ping">PING</button><button class="tpm-item" data-act="tool-snmp">SNMP poller</button><button class="tpm-item" data-act="tool-ports">Port Scanner</button>';
+  if(did)h+='<div class="tpm-sep"></div><button class="tpm-item" data-act="tool-ping">PING</button><button class="tpm-item" data-act="tool-snmp">SNMP poller</button><button class="tpm-item" data-act="tool-ports">Port Scanner</button><button class="tpm-item" data-act="tool-trace">Traceroute</button>';
   m.innerHTML=h;
   m.onclick=function(ev){
     var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
     var act=b.getAttribute('data-act');if(!act)return;
     if(act==='refresh'&&did){hideTopoMenu();toast('Refreshing...','info');api('/devices/'+did+'/refresh',{method:'POST'}).then(function(rr){toast('Status: '+rr.status+(rr.latencyMs!=null?' '+rr.latencyMs+'ms':''),rr.status==='up'?'success':'critical');});return;}
-    if(act==='tool-ping'&&did){hideTopoMenu();runTopoTool('PING - '+el.data('name'),api('/devices/'+did+'/ping').then(function(r){return 'Target : '+el.data('ip')+'\nStatus : '+(r.reachable?'REACHABLE':'UNREACHABLE')+'\nLatency: '+(r.latencyMs!=null?r.latencyMs+' ms':'-');}));return;}
+    if(act==='tool-ping'&&did){hideTopoMenu();runPingTool(el.data('name'),did,el.data('ip'));return;}
+    if(act==='tool-trace'&&did){hideTopoMenu();runTopoTool('Traceroute - '+el.data('name'),api('/tools/traceroute/'+encodeURIComponent(el.data('ip'))+'?hops=20').then(function(r){
+      if(!r||!r.completed||!r.hops||!r.hops.length)return 'Traceroute to '+el.data('ip')+' failed'+(r&&r.error?': '+r.error:'')+'.';
+      var L=['Traceroute to '+el.data('ip'),''];
+      r.hops.forEach(function(h){L.push('  '+h.hop+'  '+(h.ip||'*')+(h.avgMs!=null?'  '+Math.round(h.avgMs*10)/10+' ms':''));});
+      return L.join('\n');
+    }));return;}
     if(act==='tool-snmp'&&did){hideTopoMenu();runTopoTool('SNMP poller - '+el.data('name'),api('/devices/'+did+'/snmp').then(function(r){
       if(!r||r.error)return 'SNMP query failed'+(r&&r.error?': '+r.error:'')+'\nCheck community/credentials and that the device allows SNMP.';
       var L=['Target : '+(r.ip||el.data('ip')),'Name   : '+(r.sysName||'-'),'Descr  : '+(r.sysDescr||'-'),'CPU    : '+(r.cpuLoad!=null?r.cpuLoad+' %':'-'),'Memory : '+(r.memoryPct!=null?r.memoryPct+' %':'-'),'Time   : '+(r.timestamp||'-'),'','Interfaces ('+(r.interfaces?r.interfaces.length:0)+'):'];
