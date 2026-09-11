@@ -15,7 +15,7 @@ function emitMap(mapId, change) {
   } catch (e) {}
 }
 function fullNode(mapId, nodeId) {
-  return db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
+  return db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
 }
 
 // ── Auth ──
@@ -144,7 +144,7 @@ router.post('/maps', requireAuth, (req, res) => {
 router.get('/maps/:id', requireAuth, (req, res) => {
   const m = db.prepare('SELECT * FROM maps WHERE id=?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
-  m.nodes = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=?`).all(req.params.id);
+  m.nodes = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=?`).all(req.params.id);
   m.links = db.prepare('SELECT * FROM map_links WHERE map_id=?').all(req.params.id);
   res.json(m);
 });

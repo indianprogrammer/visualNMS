@@ -69,5 +69,6 @@ body{background:#1a1d23}
 .tpm-item:hover{background:#357bfd;color:#fff}
 .tpm-back{color:#868a91}
 .tpm-sep{height:1px;background:#3a4152;margin:5px 4px}
+#node-tip{position:absolute;z-index:40;display:none;min-width:190px;max-width:260px;background:#22262e;border:1px solid #3a4152;border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.55;color:#c2c7d0;box-shadow:0 8px 20px rgba(0,0,0,.5);pointer-events:none}
 .tpm-form{padding:4px}
 .tpm-form input,.tpm-form select{width:100%;margin-bottom:6px;background:#1a1d23;border:1px solid #3a4152;color:#c2c7d0;border-radius:6px;padding:6px 8px;font-size:.85rem;box-sizing:border-box}
