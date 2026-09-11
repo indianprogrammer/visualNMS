@@ -23,6 +23,36 @@ function toast(msg, sev) {
 }
 function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 if(!window._tpmBound){window._tpmBound=true;document.addEventListener('mousedown',function(e){var m=document.getElementById('tpm-menu');if(m&&!m.contains(e.target))m.remove();},true);document.addEventListener('keydown',function(e){if(e.key==='Escape'){var m=document.getElementById('tpm-menu');if(m)m.remove();if(_linkMode){topoLinkOff();toast('Link off','info');}}});}
+function topoDeleteSelected(){
+  if(currentPage!=='topology'||!cy||selectedMapId==null)return false;
+  var sel=cy.$(':selected');
+  if(!sel||!sel.length)return false;
+  hideTopoMenu();hideNodeTip();hideLinkTip();
+  sel.forEach(function(el){
+    if(el.isEdge&&el.isEdge()){
+      var linkId=String(el.data('id')||'').replace(/^l-/,'');
+      if(!linkId)return;
+      if(!confirm('Delete this link?'))return;
+      api('/maps/'+selectedMapId+'/links/'+linkId,{method:'DELETE'}).then(function(){toast('Link deleted','success');});
+    }else if(el.isNode&&el.isNode()){
+      var nid=el.data('mapNodeId');
+      if(nid==null)return;
+      if(!confirm('Remove this element from the map?'))return;
+      api('/maps/'+selectedMapId+'/nodes/'+nid,{method:'DELETE'}).then(function(){toast('Removed','success');});
+    }
+  });
+  return true;
+}
+if(!window._topoDelBound){window._topoDelBound=true;document.addEventListener('keydown',function(e){
+  if(e.key!=='Delete'&&e.key!=='Backspace')return;
+  var t=e.target;
+  if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return;
+  if(document.querySelector('.modal.show'))return;
+  if(currentPage!=='topology'||!cy)return;
+  if(!cy.$(':selected').length)return;
+  e.preventDefault();
+  topoDeleteSelected();
+});}
 function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',server:'ti ti-server',wireless_ap:'ti ti-antenna',firewall:'ti ti-shield',printer:'ti ti-printer',ont:'ti ti-cable'}[t]||'ti ti-device-desktop'; }
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
