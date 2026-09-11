@@ -73,6 +73,7 @@ async function fullPoll() {
     const results = [];
     const batchSize = 200;
     const boundSet = linkStats.getBoundInterfaces();
+    const cycleStats = [];
 
     const failures = [];
     for (let i = 0; i < devices.length; i += batchSize) {
@@ -84,7 +85,7 @@ async function fullPoll() {
           try {
             snmpResult = await snmpPoller.pollDevice(device);
             if (snmpResult && !snmpResult.error) {
-              linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+              linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet).forEach((r) => cycleStats.push(r));
               if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
               if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
               if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
@@ -114,6 +115,7 @@ async function fullPoll() {
     }
     checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
+    if (io && cycleStats.length) io.emit('link:stats', cycleStats);
     return results;
   } finally {
     snmpCycleInProgress = false;
@@ -140,6 +142,7 @@ async function lightPoll() {
     const results = [];
     const batchSize = 200;
     const needFull = new Set();
+    const cycleStats = [];
 
     for (let i = 0; i < devices.length; i += batchSize) {
       const batch = devices.slice(i, i + batchSize);
@@ -163,7 +166,7 @@ async function lightPoll() {
               snmpResult = await snmpPoller.pollLight(device, bound);
               snmpResult.partial = true;
               if (snmpResult && !snmpResult.error) {
-                linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+                linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet).forEach((r) => cycleStats.push(r));
                 if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
                 if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
                 if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
@@ -187,6 +190,7 @@ async function lightPoll() {
 
     checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
+    if (io && cycleStats.length) io.emit('link:stats', cycleStats);
     // Devices with bound interfaces missing an ifIndex mapping get one
     // background full poll to (re)build it.
     needFull.forEach((id) => {
@@ -204,11 +208,12 @@ async function fullPollDevice(deviceId) {
   if (!device) return null;
   const boundSet = linkStats.getBoundInterfaces();
   let snmpResult = null;
+  let devStats = [];
   if (device.snmp_community || device.snmp_version === '3') {
     try {
       snmpResult = await snmpPoller.pollDevice(device);
       if (snmpResult && !snmpResult.error) {
-        linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+        devStats = linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
         if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
         if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
         if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
@@ -222,6 +227,7 @@ async function fullPollDevice(deviceId) {
   const result = { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };
   checkAlertRules([result]);
   if (io) io.emit('poll:snmp', [result]);
+  if (io && devStats.length) io.emit('link:stats', devStats);
   return result;
 }
 
