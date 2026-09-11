@@ -139,7 +139,8 @@ function connectSocket() {
     socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);liveDevicePing(r);});
     socket.on('alert:new',function(a){toast(a.severity.toUpperCase()+': '+a.message,a.severity);if(currentPage==='alerts')loadAlerts();});
     socket.on('discovery:complete',function(r){toast('Found '+r.devicesFound+' in '+r.subnet,'success');if(currentPage==='discovery')loadDiscovery();});
-    socket.on('poll:snmp',function(r){liveDeviceIf(r);updateLinkLabels(r);liveTopoSnmp(r);});
+    socket.on('poll:snmp',function(r){liveDeviceIf(r);updateLinkOper(r);liveTopoSnmp(r);});
+    socket.on('link:stats',function(s){updateLinkRates(s);});
     socket.on('map:updated',applyMapUpdate);
   } catch(e){}
 }
@@ -709,65 +710,68 @@ function topoLinkEl(l){
   if(pOper==null&&pAdmin==null){pOper=l.src_oper!=null?l.src_oper:l.dst_oper;pAdmin=l.src_admin!=null?l.src_admin:l.dst_admin;}
   return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),srcOper:(l.src_oper!=null?l.src_oper:null),srcAdmin:(l.src_admin!=null?l.src_admin:null),dstOper:(l.dst_oper!=null?l.dst_oper:null),dstAdmin:(l.dst_admin!=null?l.dst_admin:null),label:formatLinkLabel(l.rx_bps,l.tx_bps,statLine(pOper,pAdmin))},classes:'device-link'};
 }
-var _linkPrev={};
 function _linkKey(devId,ifName){return devId+'|'+ifName;}
-function updateLinkLabels(results){
+function edgeStatTarget(e){
+  if(!cy||!e||!e.length)return null;
+  var src=cy.getElementById(e.data('source')),tgt=cy.getElementById(e.data('target'));
+  var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
+  var srcIf=e.data('srcIf'),dstIf=e.data('dstIf');
+  if(srcDev&&srcIf)return {dev:srcDev,ifn:srcIf};
+  if(tgtDev&&dstIf)return {dev:tgtDev,ifn:dstIf};
+  return null;
+}
+function edgeStatusLine(e){
+  var pOper=e.data('srcIf')?e.data('srcOper'):e.data('dstOper');
+  var pAdmin=e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin');
+  return statLine(pOper,pAdmin);
+}
+// Oper/admin refresh from poll:snmp interface payloads (both ends).
+function updateLinkOper(results){
   if(!cy||!results||!results.length)return;
-  var octByKey={},liveIfByKey={};
+  var liveIfByKey={};
   (results||[]).forEach(function(x){
     if(!x||!x.snmp||!x.snmp.interfaces||x.deviceId==null)return;
     x.snmp.interfaces.forEach(function(i){
       if(!i||!i.if_name) return;
-      octByKey[_linkKey(x.deviceId,i.if_name)]={rx:Number(i.if_in_octets)||0,tx:Number(i.if_out_octets)||0,t:Date.now()};
       liveIfByKey[_linkKey(x.deviceId,i.if_name)]={oper:(i.if_oper_status!=null?i.if_oper_status:null),admin:(i.if_admin_status!=null?i.if_admin_status:null)};
     });
   });
-  var now=Date.now();
   cy.edges().forEach(function(e){
-    var lbl=null;
     try{
       var src=cy.getElementById(e.data('source')),tgt=cy.getElementById(e.data('target'));
       var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
-      var srcIf=e.data('srcIf'),dstIf=e.data('dstIf');
-      // Refresh oper/admin from live interfaces (both ends when available)
-      var sLive=srcDev&&srcIf?liveIfByKey[_linkKey(srcDev,srcIf)]:null;
-      var tLive=tgtDev&&dstIf?liveIfByKey[_linkKey(tgtDev,dstIf)]:null;
+      var sLive=srcDev&&e.data('srcIf')?liveIfByKey[_linkKey(srcDev,e.data('srcIf'))]:null;
+      var tLive=tgtDev&&e.data('dstIf')?liveIfByKey[_linkKey(tgtDev,e.data('dstIf'))]:null;
       if(sLive){e.data('srcOper',sLive.oper);e.data('srcAdmin',sLive.admin);}
       if(tLive){e.data('dstOper',tLive.oper);e.data('dstAdmin',tLive.admin);}
-      applyLinkStatus(e);
-      var dev=null,ifn=null;
-      if(srcDev&&srcIf){dev=srcDev;ifn=srcIf;}
-      else if(tgtDev&&dstIf){dev=tgtDev;ifn=dstIf;}
-      if(dev==null||!ifn){
-        // No measurable side, but status line may still be new
-        var st0=statLine(e.data('srcIf')?e.data('srcOper'):e.data('dstOper'),e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin'));
-        lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),st0);
+      if(sLive||tLive){
+        applyLinkStatus(e);
+        var lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),edgeStatusLine(e));
         if(lbl!==e.data('label'))e.data('label',lbl);
-        return;
       }
-      var cur=octByKey[_linkKey(dev,ifn)];
-      if(!cur)return;
-      var prev=_linkPrev[_linkKey(dev,ifn)+'>'+e.data('id')];
-      _linkPrev[_linkKey(dev,ifn)+'>'+e.data('id')]=cur;
-      var rxBps=e.data('rxBps'),txBps=e.data('txBps');
-      if(prev&&now>prev.t){
-        var dt=(now-prev.t)/1000;
-        if(dt>0){
-          var drx=cur.rx-prev.rx,dtx=cur.tx-prev.tx;
-          rxBps=drx<0?0:Math.round(drx/dt*8);
-          txBps=dtx<0?0:Math.round(dtx/dt*8);
-        }
-      } else if(rxBps==null&&txBps==null){
-        return; // keep API-provided label until we have 2 samples
-      }
-      e.data('rxBps',rxBps);e.data('txBps',txBps);
-      e.data('rxOctets',cur.rx);e.data('txOctets',cur.tx);
-      var pOper=e.data('srcIf')?e.data('srcOper'):e.data('dstOper');
-      var pAdmin=e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin');
-      lbl=formatLinkLabel(rxBps,txBps,statLine(pOper,pAdmin));
+    }catch(err){}
+  });
+}
+// Live rates pushed by the server every cycle (single source of truth —
+// same numbers the hover graph draws). Also feeds the open tooltip live.
+function updateLinkRates(stats){
+  if(!cy||!stats||!stats.length)return;
+  var byKey={};
+  stats.forEach(function(s){if(s&&s.ifName)byKey[s.deviceId+'|'+s.ifName]=s;});
+  cy.edges().forEach(function(e){
+    try{
+      var t=edgeStatTarget(e);
+      if(!t)return;
+      var s=byKey[t.dev+'|'+t.ifn];
+      if(!s||(s.rxBps==null&&s.txBps==null))return;
+      e.data('rxBps',s.rxBps);e.data('txBps',s.txBps);
+      if(s.rxOctets!=null)e.data('rxOctets',s.rxOctets);
+      if(s.txOctets!=null)e.data('txOctets',s.txOctets);
+      var lbl=formatLinkLabel(s.rxBps,s.txBps,edgeStatusLine(e));
       if(lbl!==e.data('label'))e.data('label',lbl);
     }catch(err){}
   });
+  liveLinkTip(stats);
 }
 function topoStyleNode(n){n.removeClass('down up');n.addClass(n.data('statusColor')==='#e53e3e'?'down':n.data('statusColor')==='#2fb344'?'up':'');renderNodeLabel(n);}
 function applyMapUpdate(u){
@@ -801,8 +805,8 @@ function applyMapUpdate(u){
 }
 function capTip(s){s=String(s||'');return s?s.charAt(0).toUpperCase()+s.slice(1):s;}
 function hideNodeTip(){var t=document.getElementById('node-tip');if(t)t.style.display='none';}
-var _linkTipChart=null,_linkTipRun=0,_linkTipCache={};
-function hideLinkTip(){var t=document.getElementById('link-tip');if(t)t.style.display='none';if(_linkTipChart){try{_linkTipChart.destroy();}catch(e){}_linkTipChart=null;}}
+var _linkTipChart=null,_linkTipRun=0,_linkTipCache={},_linkTipTarget=null;
+function hideLinkTip(){_linkTipTarget=null;var t=document.getElementById('link-tip');if(t)t.style.display='none';if(_linkTipChart){try{_linkTipChart.destroy();}catch(e){}_linkTipChart=null;}}
 function linkStatTarget(edge){
   if(!cy||!edge||!edge.length)return null;
   var src=cy.getElementById(edge.data('source')),tgt=cy.getElementById(edge.data('target'));
@@ -847,26 +851,50 @@ function showLinkTip(e){
   }
   var rxNow=edge.data('rxBps'),txNow=edge.data('txBps');
   tip.innerHTML='<div class="fw-bold"><code>'+esc(tgt.ifn)+'</code></div>'
-    +'<div class="small text-muted mb-1">\u25BC Rx '+esc(fmtS(rxNow))+' &nbsp; \u25B2 Tx '+esc(fmtS(txNow))+'</div>'
+    +'<div class="small text-muted mb-1 link-tip-rates">\u25BC Rx '+esc(fmtS(rxNow))+' &nbsp; \u25B2 Tx '+esc(fmtS(txNow))+'</div>'
     +linkStatusHTML(edge)
     +'<div class="small text-muted" id="link-tip-status">Loading graph…</div><canvas id="link-tip-chart"></canvas>';
   tip.style.display='block';
   var edgeId=edge.data('id');
+  _linkTipTarget={edgeId:edgeId,dev:tgt.dev,ifn:tgt.ifn};
   var cached=_linkTipCache[edgeId];
   var useCache=cached&&(Date.now()-cached.t<15000);
-  var fetchP=useCache?Promise.resolve(cached.data):Promise.all([
-    api('/devices/'+tgt.dev+'/metrics?metric_type=interface_rx&interface_name='+encodeURIComponent(tgt.ifn)+'&limit=120'),
-    api('/devices/'+tgt.dev+'/metrics?metric_type=interface_tx&interface_name='+encodeURIComponent(tgt.ifn)+'&limit=120')
-  ]).then(function(a){_linkTipCache[edgeId]={t:Date.now(),data:a};return a;});
+  var fetchP;
+  if(useCache){fetchP=Promise.resolve(cached.data);}
+  else if(socket&&socket.connected){
+    // Primary: precomputed server rates over websocket (same numbers as labels).
+    fetchP=new Promise(function(resolve){
+      var done=false;
+      var to=setTimeout(function(){if(!done){done=true;fetchLinkHistoryRest(tgt.dev,tgt.ifn).then(resolve,resolve);}},3000);
+      try{
+        socket.emit('link:history',{deviceId:tgt.dev,ifName:tgt.ifn,limit:120},function(rows){
+          if(done)return;done=true;clearTimeout(to);resolve({socket:true,rows:rows||[]});
+        });
+      }catch(e){if(!done){done=true;clearTimeout(to);fetchLinkHistoryRest(tgt.dev,tgt.ifn).then(resolve,resolve);}}
+    }).then(function(a){_linkTipCache[edgeId]={t:Date.now(),data:a};return a;});
+  }
+  else{
+    fetchP=fetchLinkHistoryRest(tgt.dev,tgt.ifn).then(function(a){_linkTipCache[edgeId]={t:Date.now(),data:a};return a;});
+  }
   fetchP.then(function(a){
     if(run!==_linkTipRun)return;
     var st=document.getElementById('link-tip-status');
-    var rx=octetsToRates(a[0]),tx=octetsToRates(a[1]);
-    var n=Math.min(rx.rates.length,tx.rates.length);
-    if(!n){if(st)st.textContent='No history yet — wait one SNMP cycle.';return;}
+    var labels,rxD,txD;
+    if(a&&a.socket){
+      // Server rows oldest-first: {rx_bps,tx_bps,timestamp}
+      var rows=(a.rows||[]).slice(-120);
+      labels=rows.map(function(p){return new Date(p.timestamp).toLocaleTimeString();});
+      rxD=rows.map(function(p){return p.rx_bps;});
+      txD=rows.map(function(p){return p.tx_bps;});
+    }else{
+      var rx=octetsToRates(a[0]),tx=octetsToRates(a[1]);
+      var n=Math.min(rx.rates.length,tx.rates.length);
+      if(!n){if(st)st.textContent='No history yet — wait one SNMP cycle.';_linkTipTarget=null;return;}
+      labels=rx.labels.slice(-n);rxD=rx.rates.slice(-n);txD=tx.rates.slice(-n);
+    }
+    if(!labels.length){if(st)st.textContent='No history yet — wait one SNMP cycle.';_linkTipTarget=null;return;}
     if(st)st.remove();
-    var labels=rx.labels.slice(-n),rxD=rx.rates.slice(-n),txD=tx.rates.slice(-n);
-    var cv=document.getElementById('link-tip-chart');if(!cv)return;
+    var cv=document.getElementById('link-tip-chart');if(!cv){_linkTipTarget=null;return;}
     _linkTipChart=new Chart(cv,{type:'line',
       data:{labels:labels,datasets:[
         {label:'Rx',data:rxD,borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0,borderWidth:1.5},
@@ -874,7 +902,37 @@ function showLinkTip(e){
       options:{responsive:true,maintainAspectRatio:false,animation:false,
         scales:{x:{display:true,grid:{color:thGrid()},ticks:{color:thTick(),maxTicksLimit:6,maxRotation:45,minRotation:0,font:{size:10}}},y:{min:0,grid:{color:thGrid()},ticks:{color:thTick(),maxTicksLimit:4,callback:function(v){return fmtS(v);}}}},
         plugins:{legend:{position:'top',align:'end',labels:{color:thText(),boxWidth:12,font:{size:10}}}}}});
-  }).catch(function(){if(run!==_linkTipRun)return;var st=document.getElementById('link-tip-status');if(st)st.textContent='Graph unavailable.';});
+  }).catch(function(){if(run!==_linkTipRun)return;var st=document.getElementById('link-tip-status');if(st)st.textContent='Graph unavailable.';_linkTipTarget=null;});
+}
+function fetchLinkHistoryRest(dev,ifn){
+  return Promise.all([
+    api('/devices/'+dev+'/metrics?metric_type=interface_rx&interface_name='+encodeURIComponent(ifn)+'&limit=120'),
+    api('/devices/'+dev+'/metrics?metric_type=interface_tx&interface_name='+encodeURIComponent(ifn)+'&limit=120')
+  ]);
+}
+// Realtime: append each incoming server rate point to the open tooltip graph.
+function liveLinkTip(stats){
+  var t=_linkTipTarget;
+  if(!t||!_linkTipChart||!stats||!stats.length)return;
+  var tip=document.getElementById('link-tip');
+  if(!tip||tip.style.display==='none'){_linkTipTarget=null;return;}
+  for(var i=0;i<stats.length;i++){
+    var s=stats[i];
+    if(!s||s.deviceId!==t.dev||s.ifName!==t.ifn)continue;
+    if(s.rxBps==null&&s.txBps==null)continue;
+    var ch=_linkTipChart;
+    ch.data.labels.push(new Date().toLocaleTimeString());
+    ch.data.datasets[0].data.push(s.rxBps);
+    ch.data.datasets[1].data.push(s.txBps);
+    while(ch.data.labels.length>120){ch.data.labels.shift();ch.data.datasets.forEach(function(d){d.data.shift();});}
+    ch.update('none');
+    var edge=cy?cy.getElementById(t.edgeId):null;
+    if(edge&&edge.length){
+      var hdr=tip.querySelector('.link-tip-rates');
+      if(hdr)hdr.innerHTML='\u25BC Rx '+esc(fmtS(s.rxBps))+' &nbsp; \u25B2 Tx '+esc(fmtS(s.txBps));
+    }
+    break;
+  }
 }
 function nodeTipHTML(n){
   var d=n.data();
