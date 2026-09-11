@@ -221,7 +221,9 @@ function liveDeviceIf(results){
   var tb=document.getElementById('dev-if-tb');
   (results||[]).forEach(function(x){
     if(x.deviceId!==window._viewDevId||!x.snmp)return;
-    if(tb&&x.snmp.interfaces)tb.innerHTML=x.snmp.interfaces.map(ifRow).join('');
+    // Light (partial) cycles carry map-bound interfaces only — never wipe the
+    // full table with them. CPU chart still updates every cycle.
+    if(tb&&x.snmp.interfaces&&!x.snmp.partial)tb.innerHTML=x.snmp.interfaces.map(ifRow).join('');
     if(charts.cpu){
       charts.cpu.data.labels.push(new Date().toLocaleTimeString());
       charts.cpu.data.datasets[0].data.push(x.snmp.cpuLoad!=null?x.snmp.cpuLoad:null);

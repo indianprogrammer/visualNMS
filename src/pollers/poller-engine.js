@@ -1,14 +1,21 @@
 const db = require('../database/db');
 const pingPoller = require('./ping');
 const snmpPoller = require('./snmp');
+const linkStats = require('./link-stats');
 const config = require('../config/config');
+
+// Full SNMP walk cadence (hourly). The fast light cycle below uses effSnmpMs().
+const FULL_SNMP_MS = 3600000;
 
 let io = null;
 let interval = null;
 let snmpInterval = null;
+let fullSnmpInterval = null;
 let running = false;
 let pingCycleInProgress = false;
 let snmpCycleInProgress = false;
+let lightCycleInProgress = false;
+let fullCycleInProgress = false;
 let lastSnmpFailSig = null;
 
 function setIO(sio) { io = sio; }
@@ -56,7 +63,8 @@ let snmpFailCount = {};
 let snmpCycleCount = 0;
 
 async function fullPoll() {
-  if (snmpCycleInProgress) return [];
+  if (snmpCycleInProgress || fullCycleInProgress) return [];
+  fullCycleInProgress = true;
   snmpCycleInProgress = true;
   const t0 = Date.now();
   try {
@@ -64,6 +72,7 @@ async function fullPoll() {
     const devices = db.prepare('SELECT * FROM devices').all();
     const results = [];
     const batchSize = 200;
+    const boundSet = linkStats.getBoundInterfaces();
 
     const failures = [];
     for (let i = 0; i < devices.length; i += batchSize) {
@@ -72,23 +81,18 @@ async function fullPoll() {
         let snmpResult = null;
         if (device.snmp_community || device.snmp_version === '3') {
           const fails = snmpFailCount[device.id] || 0;
-          if (fails >= 5 && (snmpCycleCount % 12 !== 0)) {
-            snmpResult = { skipped: true, deviceId: device.id, ip: device.ip_address, timestamp: new Date().toISOString() };
-          } else {
-            try {
-              snmpResult = await snmpPoller.pollDevice(device);
-              if (snmpResult && !snmpResult.error) {
-                if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
-                if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
-                if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
-                if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
-              }
-            } catch {}
-          }
-          const hasData = snmpResult && !snmpResult.error && !snmpResult.skipped && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
-          if (snmpResult && snmpResult.skipped) {
-            // neutral: keep prior failure count, stay silent
-          } else if (!hasData) {
+          try {
+            snmpResult = await snmpPoller.pollDevice(device);
+            if (snmpResult && !snmpResult.error) {
+              linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+              if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+              if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
+              if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
+              if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+            }
+          } catch {}
+          const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
+          if (!hasData) {
             snmpFailCount[device.id] = fails + 1;
             const reason = (snmpResult && (snmpResult.error || (snmpResult.errors && snmpResult.errors[0]))) || 'no response';
             failures.push(`${device.name} (${device.ip_address}): ${reason}`);
@@ -113,7 +117,112 @@ async function fullPoll() {
     return results;
   } finally {
     snmpCycleInProgress = false;
+    fullCycleInProgress = false;
   }
+}
+
+// Light cycle (every few seconds): CPU/RAM/disk + targeted GETs for the
+// map-bound interfaces only. Dead devices use the same consecutive-failure
+// backoff, re-probed every 12th light cycle.
+async function lightPoll() {
+  if (lightCycleInProgress || fullCycleInProgress) return [];
+  lightCycleInProgress = true;
+  try {
+    snmpCycleCount++;
+    const devices = db.prepare('SELECT * FROM devices').all();
+    const boundSet = linkStats.getBoundInterfaces();
+    // ifIndex lookup for bound interfaces (built by full polls / refresh).
+    const idxByKey = {};
+    try {
+      db.prepare('SELECT device_id, if_index, if_name FROM interfaces').all()
+        .forEach((r) => { if (r.if_name) idxByKey[r.device_id + '|' + r.if_name] = r.if_index; });
+    } catch {}
+    const results = [];
+    const batchSize = 200;
+    const needFull = new Set();
+
+    for (let i = 0; i < devices.length; i += batchSize) {
+      const batch = devices.slice(i, i + batchSize);
+      const batchResults = await Promise.allSettled(batch.map(async (device) => {
+        let snmpResult = null;
+        if (device.snmp_community || device.snmp_version === '3') {
+          const fails = snmpFailCount[device.id] || 0;
+          if (fails >= 5 && (snmpCycleCount % 12 !== 0)) {
+            snmpResult = { skipped: true, deviceId: device.id, ip: device.ip_address, timestamp: new Date().toISOString() };
+          } else {
+            const bound = [];
+            boundSet.forEach((key) => {
+              const sep = key.indexOf('|');
+              if (String(key.slice(0, sep)) !== String(device.id)) return;
+              const ifName = key.slice(sep + 1);
+              const idx = idxByKey[key];
+              if (idx == null) needFull.add(device.id);
+              else bound.push({ if_index: idx, if_name: ifName });
+            });
+            try {
+              snmpResult = await snmpPoller.pollLight(device, bound);
+              snmpResult.partial = true;
+              if (snmpResult && !snmpResult.error) {
+                linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+                if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+                if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
+                if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
+                if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+              }
+            } catch {}
+          }
+          const hasData = snmpResult && !snmpResult.error && !snmpResult.skipped && (snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) || (snmpResult.interfaces && snmpResult.interfaces.length));
+          if (snmpResult && snmpResult.skipped) {
+            // neutral
+          } else if (!hasData) {
+            snmpFailCount[device.id] = fails + 1;
+          } else {
+            snmpFailCount[device.id] = 0;
+          }
+        }
+        return { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };
+      }));
+      for (const r of batchResults) if (r.status === 'fulfilled') results.push(r.value);
+    }
+
+    checkAlertRules(results);
+    if (io) io.emit('poll:snmp', results);
+    // Devices with bound interfaces missing an ifIndex mapping get one
+    // background full poll to (re)build it.
+    needFull.forEach((id) => {
+      fullPollDevice(id).catch(() => {});
+    });
+    return results;
+  } finally {
+    lightCycleInProgress = false;
+  }
+}
+
+// Full poll of a single device (context-menu refresh / missing mappings).
+async function fullPollDevice(deviceId) {
+  const device = db.prepare('SELECT * FROM devices WHERE id=?').get(deviceId);
+  if (!device) return null;
+  const boundSet = linkStats.getBoundInterfaces();
+  let snmpResult = null;
+  if (device.snmp_community || device.snmp_version === '3') {
+    try {
+      snmpResult = await snmpPoller.pollDevice(device);
+      if (snmpResult && !snmpResult.error) {
+        linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+        if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+        if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
+        if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
+        if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+        snmpFailCount[device.id] = 0;
+      } else {
+        snmpFailCount[device.id] = (snmpFailCount[device.id] || 0) + 1;
+      }
+    } catch {}
+  }
+  const result = { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };
+  checkAlertRules([result]);
+  if (io) io.emit('poll:snmp', [result]);
+  return result;
 }
 
 function checkAlertRules(results) {
@@ -160,14 +269,16 @@ function effSnmpMs() { return db.getSetting('snmp_interval_ms', config.poller.sn
 function armTimers() {
   if (interval) { clearInterval(interval); interval = null; }
   if (snmpInterval) { clearInterval(snmpInterval); snmpInterval = null; }
+  if (fullSnmpInterval) { clearInterval(fullSnmpInterval); fullSnmpInterval = null; }
   interval = setInterval(() => pingCycles().catch(e => console.error('[Poller] Ping error:', e.message)), effPingMs());
-  snmpInterval = setInterval(() => fullPoll().catch(e => console.error('[Poller] SNMP error:', e.message)), effSnmpMs());
+  snmpInterval = setInterval(() => lightPoll().catch(e => console.error('[Poller] Light poll error:', e.message)), effSnmpMs());
+  fullSnmpInterval = setInterval(() => fullPoll().catch(e => console.error('[Poller] SNMP error:', e.message)), FULL_SNMP_MS);
 }
 
 function start() {
   if (running) return;
   running = true;
-  console.log(`[Poller] Ping cycle: ${effPingMs()}ms | SNMP cycle: ${effSnmpMs()}ms`);
+  console.log(`[Poller] Ping cycle: ${effPingMs()}ms | Light SNMP: ${effSnmpMs()}ms | Full SNMP: ${FULL_SNMP_MS}ms`);
   pingCycles().catch(e => console.error('[Poller] Initial ping error:', e.message));
   fullPoll().catch(e => console.error('[Poller] Initial snmp error:', e.message));
   armTimers();
@@ -176,13 +287,14 @@ function start() {
 function applyIntervals() {
   if (!running) return;
   armTimers();
-  console.log(`[Poller] Intervals updated: ping ${effPingMs()}ms | SNMP ${effSnmpMs()}ms`);
+  console.log(`[Poller] Intervals updated: ping ${effPingMs()}ms | SNMP ${effSnmpMs()}ms | Full ${FULL_SNMP_MS}ms`);
 }
 
 function stop() {
   if (interval) { clearInterval(interval); interval = null; }
   if (snmpInterval) { clearInterval(snmpInterval); snmpInterval = null; }
+  if (fullSnmpInterval) { clearInterval(fullSnmpInterval); fullSnmpInterval = null; }
   running = false;
 }
 
-module.exports = { setIO, pingCycles, fullPoll, start, stop, applyIntervals, effPingMs, effSnmpMs };
+module.exports = { setIO, pingCycles, fullPoll, lightPoll, fullPollDevice, start, stop, applyIntervals, effPingMs, effSnmpMs, FULL_SNMP_MS };

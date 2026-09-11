@@ -177,6 +177,53 @@ async function pollDevice(device) {
   return result;
 }
 
+// Light poll (5s cadence): CPU/RAM/disk plus targeted GETs for map-bound
+// interfaces only — no full table walks. boundIfs = [{if_index, if_name}].
+async function pollLight(device, boundIfs) {
+  let session;
+  try { session = createSession(device); } catch (e) { return { error: 'session failed: ' + (e.message || e), errors: ['session: ' + (e.message || e)] }; }
+
+  const result = { deviceId: device.id, ip: device.ip_address, sysDescr: null, sysName: null, cpuLoad: null, memoryPct: null, diskPct: null, interfaces: [], errors: [], timestamp: new Date().toISOString() };
+  const errMsg = (e) => (e && e.message ? e.message : String(e));
+  const cap = async (label, promise) => { try { return await promise; } catch (e) { if (result.errors.length < 8) result.errors.push(label + ': ' + errMsg(e)); return []; } };
+
+  const [loads, stor] = await Promise.all([
+    cap('hrProcessorLoad', snmpWalk(session, OIDS.hrProcessorLoad)),
+    cap('hrStorage', snmpWalk(session, OIDS.hrStorage))
+  ]);
+  if (loads.length > 0) result.cpuLoad = Math.round(loads.reduce((s, c) => s + (Number(c.value) || 0), 0) / loads.length);
+  if (stor.length > 0) {
+    const parsed = parseStorage(stor);
+    result.memoryPct = parsed.memoryPct;
+    result.diskPct = parsed.diskPct;
+  }
+
+  const list = (boundIfs || []).filter((b) => b && b.if_index != null && b.if_name);
+  const colOids = [OIDS.ifOperStatus, OIDS.ifAdminStatus, OIDS.ifSpeed, OIDS.ifInOctets, OIDS.ifOutOctets, OIDS.ifInErrors, OIDS.ifOutErrors];
+  const colKeys = ['if_oper_status', 'if_admin_status', 'if_speed', 'if_in_octets', 'if_out_octets', 'if_in_errors', 'if_out_errors'];
+  const got = await Promise.all(list.map(async (b) => {
+    const vals = await Promise.all(colOids.map((o) => snmpGet(session, o + '.' + b.if_index).catch(() => null)));
+    const iface = { if_index: b.if_index, if_name: b.if_name };
+    let any = false;
+    vals.forEach((v, k) => {
+      if (v === null || v === undefined) return;
+      any = true;
+      iface[colKeys[k]] = (colKeys[k] === 'if_name') ? String(v) : Number(v);
+    });
+    if (!any) result.errors.push('if:' + b.if_name + ': no response');
+    return any ? iface : null;
+  }));
+  result.interfaces = got.filter(Boolean);
+
+  if (result.cpuLoad === null && result.memoryPct === null && result.diskPct === null && result.interfaces.length === 0) {
+    result.error = 'no response';
+    result.errors.push('system: no response');
+  }
+
+  try { session.close(); } catch {}
+  return result;
+}
+
 function saveInterfaces(deviceId, interfaces) {
   const ensure = db.prepare(`INSERT OR IGNORE INTO interfaces (device_id,if_index) VALUES (?,?)`);
   const metric = db.prepare(`INSERT INTO metric_history (device_id,metric_type,interface_name,value) VALUES (?,?,?,?)`);
@@ -200,4 +247,4 @@ function saveInterfaces(deviceId, interfaces) {
   txn();
 }
 
-module.exports = { OIDS, createSession, snmpGet, snmpWalk, pollDevice, saveInterfaces, parseStorage };
+module.exports = { OIDS, createSession, snmpGet, snmpWalk, pollDevice, pollLight, saveInterfaces, parseStorage };

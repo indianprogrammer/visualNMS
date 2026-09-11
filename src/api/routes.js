@@ -116,20 +116,9 @@ router.post('/devices/:id/refresh', requireAuth, async (req, res) => {
       db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'ping', pingResult.latencyMs);
     }
     try {
-      if (d.snmp_community || d.snmp_version === '3') {
-        const snmpResult = await snmpPoller.pollDevice(d);
-        if (snmpResult && !snmpResult.error) {
-          if (snmpResult.interfaces && snmpResult.interfaces.length) snmpPoller.saveInterfaces(d.id, snmpResult.interfaces);
-          if (snmpResult.cpuLoad !== null && snmpResult.cpuLoad !== undefined) {
-            db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`).run(d.id, 'cpu', snmpResult.cpuLoad);
-            db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'cpu', snmpResult.cpuLoad);
-          }
-          if (snmpResult.memoryPct !== null && snmpResult.memoryPct !== undefined) {
-            db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`).run(d.id, 'memory', snmpResult.memoryPct);
-            db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`).run(d.id, 'memory', snmpResult.memoryPct);
-          }
-        }
-      }
+      // Manual refresh = full SNMP walk for this device (hourly otherwise).
+      const pollerEngine = require('../pollers/poller-engine');
+      await pollerEngine.fullPollDevice(d.id);
     } catch (e) {}
     const nodes = db.prepare('SELECT map_id, id FROM map_nodes WHERE device_id=?').all(d.id);
     nodes.forEach(function (row) {
