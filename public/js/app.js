@@ -60,7 +60,7 @@ function connectSocket() {
   try {
     socket = io({auth:{token:AUTH_TOKEN}});
     socket.on('connect',function(){console.log('[WS] Connected');});
-    socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);});
+    socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);liveDevicePing(r);});
     socket.on('alert:new',function(a){toast(a.severity.toUpperCase()+': '+a.message,a.severity);if(currentPage==='alerts')loadAlerts();});
     socket.on('discovery:complete',function(r){toast('Found '+r.devicesFound+' in '+r.subnet,'success');if(currentPage==='discovery')loadDiscovery();});
     socket.on('poll:snmp',liveDeviceIf);
@@ -142,11 +142,28 @@ function ifRow(i){
 }
 function liveDeviceIf(results){
   if(!window._viewDevId)return;
-  var tb=document.getElementById('dev-if-tb');if(!tb)return;
+  var tb=document.getElementById('dev-if-tb');
   (results||[]).forEach(function(x){
-    if(x.deviceId===window._viewDevId&&x.snmp&&x.snmp.interfaces)tb.innerHTML=x.snmp.interfaces.map(ifRow).join('');
+    if(x.deviceId!==window._viewDevId||!x.snmp)return;
+    if(tb&&x.snmp.interfaces)tb.innerHTML=x.snmp.interfaces.map(ifRow).join('');
+    if(charts.cpu){
+      charts.cpu.data.labels.push(new Date().toLocaleTimeString());
+      charts.cpu.data.datasets[0].data.push(x.snmp.cpuLoad!=null?x.snmp.cpuLoad:null);
+      charts.cpu.data.datasets[1].data.push(x.snmp.memoryPct!=null?x.snmp.memoryPct:null);
+      trimChart(charts.cpu,120);charts.cpu.update('none');
+    }
   });
 }
+function liveDevicePing(results){
+  if(!window._viewDevId||!charts.ping)return;
+  (results||[]).forEach(function(x){
+    if(x.deviceId!==window._viewDevId||!x.ping)return;
+    charts.ping.data.labels.push(new Date().toLocaleTimeString());
+    charts.ping.data.datasets[0].data.push(x.ping.reachable?x.ping.latencyMs:null);
+    trimChart(charts.ping,120);charts.ping.update('none');
+  });
+}
+function trimChart(c,n){while(c.data.labels.length>n){c.data.labels.shift();c.data.datasets.forEach(function(d){d.data.shift();});}}
 function viewDevice(id) {
   window._viewDevId=id;
   Promise.all([api('/devices/'+id),api('/devices/'+id+'/metrics?limit=100'),api('/devices/'+id+'/interfaces')]).then(function(a){
@@ -155,7 +172,7 @@ function viewDevice(id) {
     var pd=mx.filter(function(m){return m.metric_type==='ping';}).reverse();
     var cd=mx.filter(function(m){return m.metric_type==='cpu';}).reverse();
     var md=mx.filter(function(m){return m.metric_type==='memory';}).reverse();
-    dChart('ping');var pe=document.getElementById('ch-ping');if(pe&&pd.length)charts.ping=new Chart(pe,{type:'line',data:{labels:pd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'ms',data:pd.map(function(m){return m.value;}),borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});
+    dChart('ping');var pe=document.getElementById('ch-ping');if(pe)charts.ping=new Chart(pe,{type:'line',data:{labels:pd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'ms',data:pd.map(function(m){return m.value;}),borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});
     dChart('cpu');var ce=document.getElementById('ch-cpu');if(ce)charts.cpu=new Chart(ce,{type:'line',data:{labels:cd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'CPU%',data:cd.map(function(m){return m.value;}),borderColor:'#f59f00',tension:.3,pointRadius:2},{label:'Mem%',data:md.map(function(m){return m.value;}),borderColor:'#ae3ec9',tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{min:0,max:100,grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});
   }).catch(function(e){console.error(e);toast('Error loading device','critical');});
 }
