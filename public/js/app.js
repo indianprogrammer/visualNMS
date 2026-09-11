@@ -57,9 +57,33 @@ function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',serve
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
 function fmtS(b) { if(b==null) return '-'; if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return Math.round(b)+' bps'; }
-function formatLinkLabel(rxBps,txBps) {
-  if(rxBps==null && txBps==null) return '';
-  return '\u25BC '+fmtS(rxBps)+' \u25B2 '+fmtS(txBps);
+function formatLinkLabel(rxBps,txBps,statTxt) {
+  if(rxBps==null && txBps==null && !statTxt) return '';
+  var main=(rxBps!=null||txBps!=null)?('\u25BC '+fmtS(rxBps)+' \u25B2 '+fmtS(txBps)):'';
+  if(main&&statTxt)return main+'\n'+statTxt;
+  return main||statTxt||'';
+}
+function opTxt(v){return v===1?'up':(v===2?'down':null);}
+function statLine(oper,admin){
+  var o=opTxt(oper),a=opTxt(admin);
+  if(o==null&&a==null)return '';
+  return 'O:'+(o||'?')+' A:'+(a||'?');
+}
+function applyLinkStatus(e){
+  if(!e||!e.length)return;
+  var ops=[e.data('srcOper'),e.data('dstOper')].filter(function(v){return v===1||v===2;});
+  e.removeClass('down up');
+  if(!ops.length)return;
+  e.addClass(ops.indexOf(2)>=0?'down':'up');
+}
+function linkStatusHTML(edge){
+  if(!edge||!edge.length)return '';
+  var h='';
+  var sO=opTxt(edge.data('srcOper')),sA=opTxt(edge.data('srcAdmin'));
+  var dO=opTxt(edge.data('dstOper')),dA=opTxt(edge.data('dstAdmin'));
+  if(edge.data('srcIf')&&(sO||sA))h+='<div class="small mb-1">Src Oper:<b>'+esc(sO||'?')+'</b> Admin:<b>'+esc(sA||'?')+'</b></div>';
+  if(edge.data('dstIf')&&(dO||dA))h+='<div class="small mb-1">Dst Oper:<b>'+esc(dO||'?')+'</b> Admin:<b>'+esc(dA||'?')+'</b></div>';
+  return h;
 }
 function dChart(k) { if(charts[k]){charts[k].destroy();charts[k]=null;} }
 function pTitle(t) { var e=document.getElementById('page-title'); if(e)e.textContent=t; }
@@ -264,6 +288,7 @@ function loadMap(mapId) {
       {selector:':selected',style:{'border-width':3,'border-color':'#357bfd'}}
     ]});
     cy.nodes().forEach(topoStyleNode);
+    cy.edges().forEach(applyLinkStatus);
     cy.fit(undefined, 60);
     cy.maxZoom(4); cy.minZoom(0.1);
     (function(){var cont=document.getElementById('cy-topo');if(cont)Array.prototype.slice.call(cont.childNodes).forEach(function(c){if(c.nodeName==='CANVAS')cont.removeChild(c);});if(cy.gridGuide)cy.gridGuide({drawGrid:true,panGrid:true,zoomDash:true,snapToGridOnRelease:false,snapToGridDuringDrag:false,snapToAlignmentLocationOnRelease:false,snapToAlignmentLocationDuringDrag:false,distributionGuidelines:false,geometricGuideline:false,initPosAlignment:false,centerToEdgeAlignment:false,resize:false,parentPadding:false,gridSpacing:40,gridColor:'rgba(148,163,184,0.45)',lineWidth:1,gridStackOrder:-1});})();
@@ -449,6 +474,7 @@ function showTopoLinkMenu(px,py,edge){
   else if(edge.data('srcIf')||edge.data('dstIf')) statsHtml+='<div class="small text-muted mb-1">Collecting stats…</div>';
   else statsHtml+='<div class="small text-muted mb-1">No interface bound — recreate with interface picker</div>';
   if(rxOct!=null||txOct!=null) statsHtml+='<div class="small text-muted mb-1">Total \u25BC '+esc(fmtB(rxOct))+' &nbsp; \u25B2 '+esc(fmtB(txOct))+'</div>';
+  statsHtml+=linkStatusHTML(edge);
   m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">'+esc(label)+'</div>'+statsHtml+'<button class="tpm-item" data-act="del-link">Delete</button></div>';
   var linkId=String(edge.data('id')||'').replace(/^l-/,'');
   m.onclick=function(ev){
@@ -626,7 +652,7 @@ function topoLinkTap(e){
 function topoCreateLink(src,srcIf,dst,dstIf){
   api('/maps/'+selectedMapId+'/links',{method:'POST',body:{source_node_id:src,target_node_id:dst,source_interface:srcIf,target_interface:dstIf}}).then(function(r){
     topoLinkOff();
-    if(r&&r.id&&cy&&!cy.getElementById('l-'+r.id).length&&cy.getElementById('n-'+src).length&&cy.getElementById('n-'+dst).length)cy.add(topoLinkEl({id:r.id,source_node_id:src,target_node_id:dst,source_interface:srcIf,target_interface:dstIf}));
+    if(r&&r.id&&cy&&!cy.getElementById('l-'+r.id).length&&cy.getElementById('n-'+src).length&&cy.getElementById('n-'+dst).length){var nl=cy.add(topoLinkEl({id:r.id,source_node_id:src,target_node_id:dst,source_interface:srcIf,target_interface:dstIf}));applyLinkStatus(nl);}
     toast('Link created','success');
   });
 }
@@ -658,17 +684,22 @@ function topoAddNode(){api('/devices').then(function(devs){var pl=document.getEl
 function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');if(!socket||!socket.connected)loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
 function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',cpu:(n.cpu!=null?n.cpu:null),mem:(n.memory!=null?n.memory:null),disk:(n.disk!=null?n.disk:null),statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
-function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),label:formatLinkLabel(l.rx_bps,l.tx_bps)},classes:'device-link'};}
+function topoLinkEl(l){
+  var pOper=(l.source_interface!=null?l.src_oper:l.dst_oper),pAdmin=(l.source_interface!=null?l.src_admin:l.dst_admin);
+  if(pOper==null&&pAdmin==null){pOper=l.src_oper!=null?l.src_oper:l.dst_oper;pAdmin=l.src_admin!=null?l.src_admin:l.dst_admin;}
+  return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),srcOper:(l.src_oper!=null?l.src_oper:null),srcAdmin:(l.src_admin!=null?l.src_admin:null),dstOper:(l.dst_oper!=null?l.dst_oper:null),dstAdmin:(l.dst_admin!=null?l.dst_admin:null),label:formatLinkLabel(l.rx_bps,l.tx_bps,statLine(pOper,pAdmin))},classes:'device-link'};
+}
 var _linkPrev={};
 function _linkKey(devId,ifName){return devId+'|'+ifName;}
 function updateLinkLabels(results){
   if(!cy||!results||!results.length)return;
-  var octByKey={};
+  var octByKey={},liveIfByKey={};
   (results||[]).forEach(function(x){
     if(!x||!x.snmp||!x.snmp.interfaces||x.deviceId==null)return;
     x.snmp.interfaces.forEach(function(i){
       if(!i||!i.if_name) return;
       octByKey[_linkKey(x.deviceId,i.if_name)]={rx:Number(i.if_in_octets)||0,tx:Number(i.if_out_octets)||0,t:Date.now()};
+      liveIfByKey[_linkKey(x.deviceId,i.if_name)]={oper:(i.if_oper_status!=null?i.if_oper_status:null),admin:(i.if_admin_status!=null?i.if_admin_status:null)};
     });
   });
   var now=Date.now();
@@ -678,10 +709,22 @@ function updateLinkLabels(results){
       var src=cy.getElementById(e.data('source')),tgt=cy.getElementById(e.data('target'));
       var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
       var srcIf=e.data('srcIf'),dstIf=e.data('dstIf');
+      // Refresh oper/admin from live interfaces (both ends when available)
+      var sLive=srcDev&&srcIf?liveIfByKey[_linkKey(srcDev,srcIf)]:null;
+      var tLive=tgtDev&&dstIf?liveIfByKey[_linkKey(tgtDev,dstIf)]:null;
+      if(sLive){e.data('srcOper',sLive.oper);e.data('srcAdmin',sLive.admin);}
+      if(tLive){e.data('dstOper',tLive.oper);e.data('dstAdmin',tLive.admin);}
+      applyLinkStatus(e);
       var dev=null,ifn=null;
       if(srcDev&&srcIf){dev=srcDev;ifn=srcIf;}
       else if(tgtDev&&dstIf){dev=tgtDev;ifn=dstIf;}
-      if(dev==null||!ifn){return;}
+      if(dev==null||!ifn){
+        // No measurable side, but status line may still be new
+        var st0=statLine(e.data('srcIf')?e.data('srcOper'):e.data('dstOper'),e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin'));
+        lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),st0);
+        if(lbl!==e.data('label'))e.data('label',lbl);
+        return;
+      }
       var cur=octByKey[_linkKey(dev,ifn)];
       if(!cur)return;
       var prev=_linkPrev[_linkKey(dev,ifn)+'>'+e.data('id')];
@@ -699,7 +742,9 @@ function updateLinkLabels(results){
       }
       e.data('rxBps',rxBps);e.data('txBps',txBps);
       e.data('rxOctets',cur.rx);e.data('txOctets',cur.tx);
-      lbl=formatLinkLabel(rxBps,txBps);
+      var pOper=e.data('srcIf')?e.data('srcOper'):e.data('dstOper');
+      var pAdmin=e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin');
+      lbl=formatLinkLabel(rxBps,txBps,statLine(pOper,pAdmin));
       if(lbl!==e.data('label'))e.data('label',lbl);
     }catch(err){}
   });
@@ -729,7 +774,7 @@ function applyMapUpdate(u){
     cy.remove(cy.getElementById('n-'+u.id));
   }else if(t==='link-added'&&u.link){
     if(cy.getElementById('l-'+u.link.id).length)return;
-    if(cy.getElementById('n-'+u.link.source_node_id).length&&cy.getElementById('n-'+u.link.target_node_id).length)cy.add(topoLinkEl(u.link));
+    if(cy.getElementById('n-'+u.link.source_node_id).length&&cy.getElementById('n-'+u.link.target_node_id).length){var le=cy.add(topoLinkEl(u.link));applyLinkStatus(le);}
   }else if(t==='link-deleted'&&u.id){
     cy.remove(cy.getElementById('l-'+u.id));
   }
@@ -783,6 +828,7 @@ function showLinkTip(e){
   var rxNow=edge.data('rxBps'),txNow=edge.data('txBps');
   tip.innerHTML='<div class="fw-bold"><code>'+esc(tgt.ifn)+'</code></div>'
     +'<div class="small text-muted mb-1">\u25BC Rx '+esc(fmtS(rxNow))+' &nbsp; \u25B2 Tx '+esc(fmtS(txNow))+'</div>'
+    +linkStatusHTML(edge)
     +'<div class="small text-muted" id="link-tip-status">Loading graph…</div><canvas id="link-tip-chart"></canvas>';
   tip.style.display='block';
   var edgeId=edge.data('id');

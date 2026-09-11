@@ -85,6 +85,8 @@ function enrichLink(link, nodeById) {
       }
     }
     const st = getPersistedStats(deviceId, ifName) || getInterfaceStats(deviceId, ifName);
+    const srcSt = sideOperAdmin(nodeById, link.source_node_id, link.source_interface);
+    const dstSt = sideOperAdmin(nodeById, link.target_node_id, link.target_interface);
     out.stat_device_id = deviceId;
     out.stat_if_name = ifName;
     out.stat_side = side;
@@ -93,11 +95,27 @@ function enrichLink(link, nodeById) {
     out.rx_octets = st.rxOctets;
     out.tx_octets = st.txOctets;
     out.stats_updated_at = st.updatedAt;
+    out.src_oper = srcSt.oper;
+    out.src_admin = srcSt.admin;
+    out.dst_oper = dstSt.oper;
+    out.dst_admin = dstSt.admin;
   } catch {
     out.rx_bps = null;
     out.tx_bps = null;
   }
   return out;
+}
+
+// Oper/admin status of one link end from the interfaces table.
+function sideOperAdmin(nodeById, nodeId, ifName) {
+  try {
+    const n = nodeById ? nodeById[nodeId] : null;
+    if (!n || !n.device_id || !ifName) return { oper: null, admin: null };
+    const r = db.prepare('SELECT if_oper_status, if_admin_status FROM interfaces WHERE device_id=? AND if_name=?').get(n.device_id, ifName);
+    return { oper: r ? r.if_oper_status : null, admin: r ? r.if_admin_status : null };
+  } catch {
+    return { oper: null, admin: null };
+  }
 }
 
 module.exports = { getInterfaceStats, getPersistedStats, getBoundInterfaces, recordInterfaceRates, pruneLinkHistory, enrichLink };
