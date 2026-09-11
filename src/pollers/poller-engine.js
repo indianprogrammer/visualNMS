@@ -70,9 +70,10 @@ async function fullPoll() {
               if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
               if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
               if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
+              if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
             }
           } catch {}
-          const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null);
+          const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
           if (!hasData) {
             const reason = (snmpResult && (snmpResult.error || (snmpResult.errors && snmpResult.errors[0]))) || 'no response';
             failures.push(`${device.name} (${device.ip_address}): ${reason}`);
@@ -110,6 +111,7 @@ function checkAlertRules(results) {
       switch (rule.metric_type) {
         case 'cpu': value = r.snmp?.cpuLoad; break;
         case 'memory': value = r.snmp?.memoryPct; break;
+        case 'disk': value = r.snmp?.diskPct; break;
       }
       if (value === null || value === undefined) continue;
 

@@ -70,5 +70,7 @@ body{background:#1a1d23}
 .tpm-back{color:#868a91}
 .tpm-sep{height:1px;background:#3a4152;margin:5px 4px}
 #node-tip{position:absolute;z-index:40;display:none;min-width:190px;max-width:260px;background:#22262e;border:1px solid #3a4152;border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.55;color:#c2c7d0;box-shadow:0 8px 20px rgba(0,0,0,.5);pointer-events:none}
+#link-tip{position:absolute;z-index:41;display:none;width:1280px;max-width:calc(100% - 8px);background:#22262e;border:1px solid #3a4152;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;color:#c2c7d0;box-shadow:0 8px 20px rgba(0,0,0,.5);pointer-events:none}
+#link-tip canvas{width:100%!important;height:520px!important}
 .tpm-form{padding:4px}
 .tpm-form input,.tpm-form select{width:100%;margin-bottom:6px;background:#1a1d23;border:1px solid #3a4152;color:#c2c7d0;border-radius:6px;padding:6px 8px;font-size:.85rem;box-sizing:border-box}

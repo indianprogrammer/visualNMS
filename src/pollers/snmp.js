@@ -97,11 +97,41 @@ function extractInterfaces(walks) {
   return Object.values(ifaces);
 }
 
+// hrStorageFixedDisk type OID suffix; values may arrive as dotted OID strings.
+function parseStorage(stor) {
+  const um = {}, sm = {}, dm = {}, tm = {};
+  for (const x of stor || []) {
+    const m = String(x.oid || '').match(/\.25\.2\.3\.1\.(\d+)\.(\d+)$/);
+    if (!m) continue;
+    if (m[1] === '2') tm[m[2]] = String(x.value ?? '').replace(/[^0-9.]/g, '');
+    else if (m[1] === '3') dm[m[2]] = x.value?.toString() || '';
+    else if (m[1] === '5') sm[m[2]] = Number(x.value) || 0;
+    else if (m[1] === '6') um[m[2]] = Number(x.value) || 0;
+  }
+  let memoryPct = null;
+  for (const i of Object.keys(sm)) {
+    if (dm[i] && (dm[i].toLowerCase().includes('ram') || dm[i].toLowerCase().includes('memory') || i === '1')) {
+      const total = sm[i] * 1024;
+      if (total > 0) { memoryPct = Math.round((um[i] * 1024 / total) * 100); break; }
+    }
+  }
+  // Main fixed disk = largest hrStorageFixedDisk volume (by total size).
+  let diskPct = null;
+  let bestSize = 0;
+  for (const i of Object.keys(sm)) {
+    if (tm[i] && tm[i].endsWith('25.2.1.4') && sm[i] > 0) {
+      const pct = Math.round(((um[i] || 0) / sm[i]) * 100);
+      if (sm[i] > bestSize) { bestSize = sm[i]; diskPct = pct; }
+    }
+  }
+  return { memoryPct, diskPct };
+}
+
 async function pollDevice(device) {
   let session;
   try { session = createSession(device); } catch (e) { return { error: 'session failed: ' + (e.message || e), errors: ['session: ' + (e.message || e)] }; }
 
-  const result = { deviceId: device.id, ip: device.ip_address, sysDescr: null, sysName: null, cpuLoad: null, memoryPct: null, interfaces: [], errors: [], timestamp: new Date().toISOString() };
+  const result = { deviceId: device.id, ip: device.ip_address, sysDescr: null, sysName: null, cpuLoad: null, memoryPct: null, diskPct: null, interfaces: [], errors: [], timestamp: new Date().toISOString() };
   const errMsg = (e) => (e && e.message ? e.message : String(e));
   const cap = async (label, promise) => { try { return await promise; } catch (e) { result.errors.push(label + ': ' + errMsg(e)); return []; } };
 
@@ -128,20 +158,9 @@ async function pollDevice(device) {
 
   try {
     const stor = await cap('hrStorage', snmpWalk(session, OIDS.hrStorage));
-    const um = {}, sm = {}, dm = {};
-    for (const x of stor) {
-      const m = x.oid.match(/\.25\.2\.3\.1\.(\d+)\.(\d+)$/);
-      if (!m) continue;
-      if (m[1] === '3') dm[m[2]] = x.value?.toString() || '';
-      else if (m[1] === '5') sm[m[2]] = Number(x.value) || 0;
-      else if (m[1] === '6') um[m[2]] = Number(x.value) || 0;
-    }
-    for (const i of Object.keys(sm)) {
-      if (dm[i] && (dm[i].toLowerCase().includes('ram') || dm[i].toLowerCase().includes('memory') || i === '1')) {
-        const total = sm[i] * 1024;
-        if (total > 0) { result.memoryPct = Math.round((um[i] * 1024 / total) * 100); break; }
-      }
-    }
+    const parsed = parseStorage(stor);
+    result.memoryPct = parsed.memoryPct;
+    result.diskPct = parsed.diskPct;
   } catch {}
 
   try { session.close(); } catch {}
@@ -169,4 +188,4 @@ function saveInterfaces(deviceId, interfaces) {
   txn();
 }
 
-module.exports = { OIDS, createSession, snmpGet, snmpWalk, pollDevice, saveInterfaces };
+module.exports = { OIDS, createSession, snmpGet, snmpWalk, pollDevice, saveInterfaces, parseStorage };

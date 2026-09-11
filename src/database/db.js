@@ -192,6 +192,18 @@ CREATE TABLE IF NOT EXISTS discovery_jobs (
   completed_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS link_rate_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id INTEGER NOT NULL,
+  interface_name TEXT NOT NULL,
+  rx_bps REAL,
+  tx_bps REAL,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lrh_dev_if_time ON link_rate_history(device_id, interface_name, timestamp);
+CREATE INDEX IF NOT EXISTS idx_lrh_time ON link_rate_history(timestamp);
 `);
 
 db.getSetting = function (key, fallback) {

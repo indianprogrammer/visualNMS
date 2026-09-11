@@ -15,7 +15,15 @@ function emitMap(mapId, change) {
   } catch (e) {}
 }
 function fullNode(mapId, nodeId) {
-  return db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
+  const n = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
+  if (n && n.device_id) {
+    try {
+      const lm = db.prepare(`SELECT metric_type, value FROM last_metrics WHERE device_id=? AND metric_type IN ('cpu','memory','disk')`).all(n.device_id);
+      n.cpu = null; n.memory = null; n.disk = null;
+      lm.forEach((r) => { if (r.metric_type === 'cpu') n.cpu = r.value; else if (r.metric_type === 'memory') n.memory = r.value; else if (r.metric_type === 'disk') n.disk = r.value; });
+    } catch {}
+  }
+  return n;
 }
 
 // ── Auth ──
@@ -70,6 +78,7 @@ router.get('/devices/:id/metrics', requireAuth, (req, res) => {
   let sql = 'SELECT * FROM metric_history WHERE device_id=?';
   const p = [req.params.id];
   if (req.query.metric_type) { sql += ' AND metric_type=?'; p.push(req.query.metric_type); }
+  if (req.query.interface_name) { sql += ' AND interface_name=?'; p.push(req.query.interface_name); }
   if (req.query.hours) { sql += ` AND timestamp > datetime('now',?)`; p.push(`-${parseInt(req.query.hours)} hours`); }
   sql += ' ORDER BY timestamp DESC LIMIT ' + (parseInt(req.query.limit) || 500);
   res.json(db.prepare(sql).all(...p));
@@ -145,7 +154,24 @@ router.get('/maps/:id', requireAuth, (req, res) => {
   const m = db.prepare('SELECT * FROM maps WHERE id=?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   m.nodes = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=?`).all(req.params.id);
-  m.links = db.prepare('SELECT * FROM map_links WHERE map_id=?').all(req.params.id);
+  try {
+    const lm = db.prepare(`SELECT device_id, metric_type, value FROM last_metrics WHERE metric_type IN ('cpu','memory','disk')`).all();
+    const lmByDev = {};
+    lm.forEach((r) => { (lmByDev[r.device_id] = lmByDev[r.device_id] || {})[r.metric_type] = r.value; });
+    m.nodes.forEach((n) => {
+      const s = n.device_id ? lmByDev[n.device_id] : null;
+      n.cpu = s && s.cpu != null ? s.cpu : null;
+      n.memory = s && s.memory != null ? s.memory : null;
+      n.disk = s && s.disk != null ? s.disk : null;
+    });
+  } catch {}
+  const rawLinks = db.prepare('SELECT * FROM map_links WHERE map_id=?').all(req.params.id);
+  try {
+    const linkStats = require('../pollers/link-stats');
+    const nodeById = {};
+    m.nodes.forEach((n) => { nodeById[n.id] = n; });
+    m.links = rawLinks.map((l) => linkStats.enrichLink(l, nodeById));
+  } catch { m.links = rawLinks; }
   res.json(m);
 });
 
@@ -193,7 +219,14 @@ router.post('/maps/:id/links', requireAuth, (req, res) => {
   if (!b.source_node_id || !b.target_node_id) return res.status(400).json({ error: 'source and target required' });
   const r = db.prepare('INSERT INTO map_links (map_id,source_node_id,target_node_id,source_interface,target_interface,max_speed_bps) VALUES (?,?,?,?,?,?)').run(req.params.id, b.source_node_id, b.target_node_id, b.source_interface||null, b.target_interface||null, b.max_speed_bps||1000000000);
   res.status(201).json({ id: r.lastInsertRowid });
-  emitMap(req.params.id, { type: 'link-added', link: db.prepare('SELECT * FROM map_links WHERE id=?').get(r.lastInsertRowid) });
+  try {
+    const linkStats = require('../pollers/link-stats');
+    const raw = db.prepare('SELECT * FROM map_links WHERE id=?').get(r.lastInsertRowid);
+    const nodes = db.prepare('SELECT id, device_id FROM map_nodes WHERE map_id=?').all(req.params.id);
+    const nodeById = {};
+    nodes.forEach((n) => { nodeById[n.id] = n; });
+    emitMap(req.params.id, { type: 'link-added', link: linkStats.enrichLink(raw, nodeById) });
+  } catch { emitMap(req.params.id, { type: 'link-added', link: db.prepare('SELECT * FROM map_links WHERE id=?').get(r.lastInsertRowid) }); }
 });
 
 router.delete('/maps/:mapId/links/:linkId', requireAuth, (req, res) => {

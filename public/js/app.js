@@ -26,7 +26,11 @@ if(!window._tpmBound){window._tpmBound=true;document.addEventListener('mousedown
 function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',server:'ti ti-server',wireless_ap:'ti ti-antenna',firewall:'ti ti-shield',printer:'ti ti-printer',ont:'ti ti-cable'}[t]||'ti ti-device-desktop'; }
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
-function fmtS(b) { if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return b+' bps'; }
+function fmtS(b) { if(b==null) return '-'; if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return Math.round(b)+' bps'; }
+function formatLinkLabel(rxBps,txBps) {
+  if(rxBps==null && txBps==null) return '';
+  return '\u25BC '+fmtS(rxBps)+' \u25B2 '+fmtS(txBps);
+}
 function dChart(k) { if(charts[k]){charts[k].destroy();charts[k]=null;} }
 function pTitle(t) { var e=document.getElementById('page-title'); if(e)e.textContent=t; }
 function pHTML(h) { var e=document.getElementById('page-content'); if(e)e.innerHTML=h; return e; }
@@ -63,7 +67,7 @@ function connectSocket() {
     socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);liveDevicePing(r);});
     socket.on('alert:new',function(a){toast(a.severity.toUpperCase()+': '+a.message,a.severity);if(currentPage==='alerts')loadAlerts();});
     socket.on('discovery:complete',function(r){toast('Found '+r.devicesFound+' in '+r.subnet,'success');if(currentPage==='discovery')loadDiscovery();});
-    socket.on('poll:snmp',liveDeviceIf);
+    socket.on('poll:snmp',function(r){liveDeviceIf(r);updateLinkLabels(r);liveTopoSnmp(r);});
     socket.on('map:updated',applyMapUpdate);
   } catch(e){}
 }
@@ -204,7 +208,7 @@ document.getElementById('btn-save-dev').onclick=function(){
 // ═══ TOPOLOGY ═══
 function loadTopology() {
   api('/maps').then(function(maps){
-    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative" id="topo-wrap"><div class="topology-container" id="cy-topo"></div><div id="node-tip"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
+    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative" id="topo-wrap"><div class="topology-container" id="cy-topo"></div><div id="node-tip"></div><div id="link-tip"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
     var tsel=document.getElementById('topo-sel');if(!tsel)return;
     tsel.onchange=function(e){if(e.target.value){selectedMapId=parseInt(e.target.value);document.getElementById('topo-tools').style.display='';loadMap(selectedMapId);}};
     if(maps.length){tsel.value=maps[0].id;selectedMapId=maps[0].id;document.getElementById('topo-tools').style.display='';loadMap(maps[0].id);}
@@ -224,7 +228,7 @@ function loadMap(mapId) {
       {selector:'node.network',style:{'shape':'ellipse','background-color':'#152238','border-style':'dashed','border-color':'#5b8fd4'}},
       {selector:'node.submap',style:{'background-color':'#1d2440','border-style':'double','border-color':'#7c8aff'}},
       {selector:'node.static',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#3a4152','border-color':'rgba(255,255,255,0.3)','text-max-width':'64px','font-size':'11px'}},
-      {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':'#868a91','text-background-color':'#1a1d23','text-background-opacity':0.8}},
+      {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':'#c2c7d0','text-background-color':'#1a1d23','text-background-opacity':0.9,'text-wrap':'wrap','edge-text-rotation':'autorotate','text-margin-y':-12,'text-outline-width':0}},
       {selector:'.down',style:{'line-color':'#e53e3e'}},
       {selector:'.up',style:{'line-color':'#2fb344'}},
       {selector:':selected',style:{'border-width':3,'border-color':'#357bfd'}}
@@ -253,6 +257,7 @@ function loadMap(mapId) {
       else if(e.target.isEdge&&e.target.isEdge())showTopoLinkMenu(px,py,e.target);
     });
     cy.on('mouseover','node',function(e){
+      hideLinkTip();
       var tip=document.getElementById('node-tip');if(!tip)return;
       tip.innerHTML=nodeTipHTML(e.target);
       var rp=e.target.renderedPosition();
@@ -264,7 +269,9 @@ function loadMap(mapId) {
       tip.style.transform='translate(-50%,-100%)';
     });
     cy.on('mouseout grab','node',hideNodeTip);
-    cy.on('pan zoom',hideNodeTip);
+    cy.on('pan zoom',function(){hideNodeTip();hideLinkTip();});
+    cy.on('mouseover','edge',showLinkTip);
+    cy.on('mouseout','edge',hideLinkTip);
     var saveTimer=null;
     cy.on('drag','node',function(){_justDragged=true;});
     cy.on('dragfree','node',function(e){var n=e.target;var p=n.position();if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(function(){api('/maps/'+selectedMapId+'/nodes/'+n.data('mapNodeId'),{method:'PUT',body:{x_position:Math.round(p.x),y_position:Math.round(p.y)}}).catch(function(){});},400);});
@@ -403,7 +410,15 @@ function showTopoLinkMenu(px,py,edge){
   m.style.top=Math.min(Math.max(0,py),Math.max(0,r.height-120))+'px';
   var sn=cy.getElementById(edge.data('source')),tn=cy.getElementById(edge.data('target'));
   var label='Link'+(sn.length&&tn.length?': '+sn.data('name')+' → '+tn.data('name'):'');
-  m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">'+esc(label)+'</div><button class="tpm-item" data-act="del-link">Delete</button></div>';
+  var statIf=edge.data('statIf'),rxBps=edge.data('rxBps'),txBps=edge.data('txBps');
+  var rxOct=edge.data('rxOctets'),txOct=edge.data('txOctets');
+  var statsHtml='';
+  if(statIf) statsHtml+='<div class="small mb-1"><code>'+esc(statIf)+'</code></div>';
+  if(rxBps!=null||txBps!=null) statsHtml+='<div class="small mb-1">\u25BC Rx '+esc(fmtS(rxBps))+' &nbsp; \u25B2 Tx '+esc(fmtS(txBps))+'</div>';
+  else if(edge.data('srcIf')||edge.data('dstIf')) statsHtml+='<div class="small text-muted mb-1">Collecting stats…</div>';
+  else statsHtml+='<div class="small text-muted mb-1">No interface bound — recreate with interface picker</div>';
+  if(rxOct!=null||txOct!=null) statsHtml+='<div class="small text-muted mb-1">Total \u25BC '+esc(fmtB(rxOct))+' &nbsp; \u25B2 '+esc(fmtB(txOct))+'</div>';
+  m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">'+esc(label)+'</div>'+statsHtml+'<button class="tpm-item" data-act="del-link">Delete</button></div>';
   var linkId=String(edge.data('id')||'').replace(/^l-/,'');
   m.onclick=function(ev){
     var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
@@ -578,7 +593,7 @@ function topoLinkTap(e){
 function topoCreateLink(src,srcIf,dst,dstIf){
   api('/maps/'+selectedMapId+'/links',{method:'POST',body:{source_node_id:src,target_node_id:dst,source_interface:srcIf,target_interface:dstIf}}).then(function(r){
     topoLinkOff();
-    if(r&&r.id&&cy&&!cy.getElementById('l-'+r.id).length&&cy.getElementById('n-'+src).length&&cy.getElementById('n-'+dst).length)cy.add(topoLinkEl({id:r.id,source_node_id:src,target_node_id:dst}));
+    if(r&&r.id&&cy&&!cy.getElementById('l-'+r.id).length&&cy.getElementById('n-'+src).length&&cy.getElementById('n-'+dst).length)cy.add(topoLinkEl({id:r.id,source_node_id:src,target_node_id:dst,source_interface:srcIf,target_interface:dstIf}));
     toast('Link created','success');
   });
 }
@@ -609,8 +624,53 @@ function topoIfPicker(node,cb){
 function topoAddNode(){api('/devices').then(function(devs){var pl=document.getElementById('topo-palette');document.getElementById('palette-list').innerHTML=devs.map(function(d){return '<div class="palette-item" title="'+esc(d.name)+'" onclick="addNode('+selectedMapId+','+d.id+')"><div class="device-icon '+d.device_type+'" style="width:28px;height:28px;font-size:.7rem"><i class="'+iconCls(d.device_type)+'"></i></div></div>';}).join('');pl.classList.add('visible');});}
 function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
-function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
-function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,label:l.label||''},classes:'device-link'};}
+function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',cpu:(n.cpu!=null?n.cpu:null),mem:(n.memory!=null?n.memory:null),disk:(n.disk!=null?n.disk:null),statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
+function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),label:formatLinkLabel(l.rx_bps,l.tx_bps)},classes:'device-link'};}
+var _linkPrev={};
+function _linkKey(devId,ifName){return devId+'|'+ifName;}
+function updateLinkLabels(results){
+  if(!cy||!results||!results.length)return;
+  var octByKey={};
+  (results||[]).forEach(function(x){
+    if(!x||!x.snmp||!x.snmp.interfaces||x.deviceId==null)return;
+    x.snmp.interfaces.forEach(function(i){
+      if(!i||!i.if_name) return;
+      octByKey[_linkKey(x.deviceId,i.if_name)]={rx:Number(i.if_in_octets)||0,tx:Number(i.if_out_octets)||0,t:Date.now()};
+    });
+  });
+  var now=Date.now();
+  cy.edges().forEach(function(e){
+    var lbl=null;
+    try{
+      var src=cy.getElementById(e.data('source')),tgt=cy.getElementById(e.data('target'));
+      var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
+      var srcIf=e.data('srcIf'),dstIf=e.data('dstIf');
+      var dev=null,ifn=null;
+      if(srcDev&&srcIf){dev=srcDev;ifn=srcIf;}
+      else if(tgtDev&&dstIf){dev=tgtDev;ifn=dstIf;}
+      if(dev==null||!ifn){return;}
+      var cur=octByKey[_linkKey(dev,ifn)];
+      if(!cur)return;
+      var prev=_linkPrev[_linkKey(dev,ifn)+'>'+e.data('id')];
+      _linkPrev[_linkKey(dev,ifn)+'>'+e.data('id')]=cur;
+      var rxBps=e.data('rxBps'),txBps=e.data('txBps');
+      if(prev&&now>prev.t){
+        var dt=(now-prev.t)/1000;
+        if(dt>0){
+          var drx=cur.rx-prev.rx,dtx=cur.tx-prev.tx;
+          rxBps=drx<0?0:Math.round(drx/dt*8);
+          txBps=dtx<0?0:Math.round(dtx/dt*8);
+        }
+      } else if(rxBps==null&&txBps==null){
+        return; // keep API-provided label until we have 2 samples
+      }
+      e.data('rxBps',rxBps);e.data('txBps',txBps);
+      e.data('rxOctets',cur.rx);e.data('txOctets',cur.tx);
+      lbl=formatLinkLabel(rxBps,txBps);
+      if(lbl!==e.data('label'))e.data('label',lbl);
+    }catch(err){}
+  });
+}
 function topoStyleNode(n){n.removeClass('down up');n.addClass(n.data('statusColor')==='#e53e3e'?'down':n.data('statusColor')==='#2fb344'?'up':'');renderNodeLabel(n);}
 function applyMapUpdate(u){
   if(!u||!cy||currentPage!=='topology'||u.mapId!==selectedMapId)return;
@@ -643,6 +703,80 @@ function applyMapUpdate(u){
 }
 function capTip(s){s=String(s||'');return s?s.charAt(0).toUpperCase()+s.slice(1):s;}
 function hideNodeTip(){var t=document.getElementById('node-tip');if(t)t.style.display='none';}
+var _linkTipChart=null,_linkTipRun=0,_linkTipCache={};
+function hideLinkTip(){var t=document.getElementById('link-tip');if(t)t.style.display='none';if(_linkTipChart){try{_linkTipChart.destroy();}catch(e){}_linkTipChart=null;}}
+function linkStatTarget(edge){
+  if(!cy||!edge||!edge.length)return null;
+  var src=cy.getElementById(edge.data('source')),tgt=cy.getElementById(edge.data('target'));
+  var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
+  var srcIf=edge.data('srcIf'),dstIf=edge.data('dstIf');
+  if(srcDev&&srcIf)return {dev:srcDev,ifn:srcIf};
+  if(tgtDev&&dstIf)return {dev:tgtDev,ifn:dstIf};
+  return null;
+}
+function octetsToRates(rows){
+  var asc=(rows||[]).slice().reverse(),labels=[],rates=[];
+  for(var i=1;i<asc.length;i++){
+    var t1=new Date(asc[i].timestamp).getTime(),t0=new Date(asc[i-1].timestamp).getTime();
+    var dt=(t1-t0)/1000;
+    if(!isFinite(dt)||dt<=0)continue;
+    var d=(Number(asc[i].value)||0)-(Number(asc[i-1].value)||0);
+    rates.push(d<0?0:Math.round(d/dt*8));
+    labels.push(new Date(asc[i].timestamp).toLocaleTimeString());
+  }
+  return {labels:labels,rates:rates};
+}
+function showLinkTip(e){
+  var edge=e.target;
+  var tip=document.getElementById('link-tip');if(!tip||!edge)return;
+  hideNodeTip();
+  if(_linkTipChart){try{_linkTipChart.destroy();}catch(err){}_linkTipChart=null;}
+  var run=++_linkTipRun;
+  var tgt=linkStatTarget(edge);
+  var w=document.getElementById('topo-wrap');if(!w)return;
+  var r=w.getBoundingClientRect();
+  var px=null,py=null,oe=e.originalEvent;
+  if(oe&&oe.clientX!==undefined){px=oe.clientX-r.left+16;py=oe.clientY-r.top+16;}
+  else if(edge.midpoint){var mp=edge.midpoint();var rp=edge.renderedPosition?edge.renderedPosition():null;if(rp){var cr=document.getElementById('cy-topo'),c=cr.getBoundingClientRect();px=c.left-r.left+rp.x+16;py=c.top-r.top+rp.y+16;}}
+  if(px==null){px=r.width/2;py=60;}
+  tip.style.left=Math.min(Math.max(4,px),Math.max(4,r.width-1290))+'px';
+  tip.style.top=Math.min(Math.max(4,py),Math.max(4,r.height-620))+'px';
+  tip.style.transform='none';
+  if(!tgt){
+    tip.innerHTML='<div class="fw-bold">Link</div><div class="text-muted">No interface bound — recreate with interface picker</div>';
+    tip.style.display='block';
+    return;
+  }
+  var rxNow=edge.data('rxBps'),txNow=edge.data('txBps');
+  tip.innerHTML='<div class="fw-bold"><code>'+esc(tgt.ifn)+'</code></div>'
+    +'<div class="small text-muted mb-1">\u25BC Rx '+esc(fmtS(rxNow))+' &nbsp; \u25B2 Tx '+esc(fmtS(txNow))+'</div>'
+    +'<div class="small text-muted" id="link-tip-status">Loading graph…</div><canvas id="link-tip-chart"></canvas>';
+  tip.style.display='block';
+  var edgeId=edge.data('id');
+  var cached=_linkTipCache[edgeId];
+  var useCache=cached&&(Date.now()-cached.t<15000);
+  var fetchP=useCache?Promise.resolve(cached.data):Promise.all([
+    api('/devices/'+tgt.dev+'/metrics?metric_type=interface_rx&interface_name='+encodeURIComponent(tgt.ifn)+'&limit=120'),
+    api('/devices/'+tgt.dev+'/metrics?metric_type=interface_tx&interface_name='+encodeURIComponent(tgt.ifn)+'&limit=120')
+  ]).then(function(a){_linkTipCache[edgeId]={t:Date.now(),data:a};return a;});
+  fetchP.then(function(a){
+    if(run!==_linkTipRun)return;
+    var st=document.getElementById('link-tip-status');
+    var rx=octetsToRates(a[0]),tx=octetsToRates(a[1]);
+    var n=Math.min(rx.rates.length,tx.rates.length);
+    if(!n){if(st)st.textContent='No history yet — wait one SNMP cycle.';return;}
+    if(st)st.remove();
+    var labels=rx.labels.slice(-n),rxD=rx.rates.slice(-n),txD=tx.rates.slice(-n);
+    var cv=document.getElementById('link-tip-chart');if(!cv)return;
+    _linkTipChart=new Chart(cv,{type:'line',
+      data:{labels:labels,datasets:[
+        {label:'Rx',data:rxD,borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0,borderWidth:1.5},
+        {label:'Tx',data:txD,borderColor:'#357bfd',backgroundColor:'#357bfd22',fill:true,tension:.3,pointRadius:0,borderWidth:1.5}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,
+        scales:{x:{display:true,grid:{color:'#2d3139'},ticks:{color:'#868a91',maxTicksLimit:6,maxRotation:45,minRotation:0,font:{size:10}}},y:{min:0,grid:{color:'#2d3139'},ticks:{color:'#868a91',maxTicksLimit:4,callback:function(v){return fmtS(v);}}}},
+        plugins:{legend:{position:'top',align:'end',labels:{color:'#c2c7d0',boxWidth:12,font:{size:10}}}}}});
+  }).catch(function(){if(run!==_linkTipRun)return;var st=document.getElementById('link-tip-status');if(st)st.textContent='Graph unavailable.';});
+}
 function nodeTipHTML(n){
   var d=n.data();
   if(!d.deviceId){var kind=d.subMapId?'Submap':(n.hasClass('network')?'Network':'Static object');return '<div class="fw-bold">'+esc(d.name)+'</div><div class="text-muted">'+esc(kind)+'</div>';}
@@ -651,16 +785,43 @@ function nodeTipHTML(n){
   if(d.mac)h+='<div>MAC: '+esc(d.mac)+'</div>';
   if(d.lastSeen)h+='<div>Last seen: '+esc(d.lastSeen)+'</div>';
   h+='<div>Status: <span style="color:'+d.statusColor+';font-weight:600">'+esc(capTip(d.statusText||'unknown'))+'</span></div>';
+  if(d.cpu!=null||d.mem!=null||d.disk!=null){
+    h+='<div class="mt-1">'
+      +(d.cpu!=null?'<div>CPU: <b class="text-white">'+d.cpu+' %</b></div>':'')
+      +(d.mem!=null?'<div>Memory: <b class="text-white">'+d.mem+' %</b></div>':'')
+      +(d.disk!=null?'<div>Disk: <b class="text-white">'+d.disk+' %</b></div>':'')
+      +'</div>';
+  }
   return h;
 }
 function renderNodeLabel(n){
   if(!n.data('deviceId')){n.data('label',n.data('name'));return;}
+  var parts=[n.data('name'),n.data('ip')||''];
   var lat=n.data('lat');
   var status=n.data('statusColor')==='#e53e3e'?'DOWN':(lat==='--'?'':'UP');
-  var statusLine=status?('<span>'+status+'</span>'):'';
-  n.data('label',n.data('name')+'\n'+n.data('ip')+'\n'+lat+'ms');
+  var line=status;
+  if(status==='UP'&&typeof lat==='number')line+=' '+lat+'ms';
+  if(line)parts.push(line);
+  var stats=[];
+  if(n.data('cpu')!=null)stats.push('CPU '+n.data('cpu')+'%');
+  if(n.data('mem')!=null)stats.push('MEM '+n.data('mem')+'%');
+  if(n.data('disk')!=null)stats.push('DISK '+n.data('disk')+'%');
+  if(stats.length)parts.push(stats.join(' '));
+  n.data('label',parts.join('\n'));
 }
 function liveTopo(r){if(!cy)return;r.forEach(function(x){cy.nodes().filter(function(n){return n.data('deviceId')===x.deviceId;}).forEach(function(n){var reach=(x.ping&&x.ping.reachable);n.data('statusColor',sColor(reach?'up':'down'));n.data('statusText',reach?'up':'down');n.removeClass('down up').addClass(reach?'up':'down');n.data('lat',reach?Math.round(x.ping.latencyMs*10)/10:'DOWN');renderNodeLabel(n);});});}
+function liveTopoSnmp(results){
+  if(!cy||!results||!results.length)return;
+  (results||[]).forEach(function(x){
+    if(!x||x.deviceId==null||!x.snmp)return;
+    cy.nodes().filter(function(n){return n.data('deviceId')===x.deviceId;}).forEach(function(n){
+      if(x.snmp.cpuLoad!=null)n.data('cpu',x.snmp.cpuLoad);
+      if(x.snmp.memoryPct!=null)n.data('mem',x.snmp.memoryPct);
+      if(x.snmp.diskPct!=null)n.data('disk',x.snmp.diskPct);
+      renderNodeLabel(n);
+    });
+  });
+}
 function topoZoom(keys){
   if(!cy)return;
   var z=cy.zoom()*(Math.exp(keys/3));
@@ -689,7 +850,7 @@ function resolveAlert(id){api('/alerts/'+id+'/resolve',{method:'POST'}).then(fet
 
 function loadAlertRules(){
   api('/alert-rules').then(function(rules){
-    pHTML('<div class="d-flex justify-content-between mb-3"><h3>Alert Rules</h3><div class="d-flex gap-2"><button class="btn btn-secondary" onclick="loadAlerts()"><i class="ti ti-arrow-left"></i> Back</button><button class="btn btn-primary" onclick="new bootstrap.Modal(document.getElementById(\'modal-rule\')).show()"><i class="ti ti-plus"></i> Add</button></div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Cooldown</th><th>Actions</th></tr></thead><tbody>'+rules.map(function(r){return '<tr><td class="fw-medium">'+esc(r.name)+'</td><td>'+r.metric_type+'</td><td><code>'+r.condition_op+' '+r.threshold+'</code></td><td><span class="badge bg-'+(r.severity==='critical'?'danger':'warning')+'">'+r.severity+'</span></td><td>'+r.cooldown_seconds+'s</td><td><button class="btn btn-ghost btn-sm text-danger" onclick="delRule('+r.id+')"><i class="ti ti-trash"></i></button></td></tr>';}).join('')+'</tbody></table></div></div><div class="modal fade" id="modal-rule" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Alert Rule</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="rf-name"></div><div class="row"><div class="col-md-5 mb-3"><label class="form-label">Metric</label><select class="form-select" id="rf-met"><option value="ping">Ping Latency</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="packet_loss">Packet Loss</option><option value="status">Status</option></select></div><div class="col-md-3 mb-3"><label class="form-label">Op</label><select class="form-select" id="rf-op"><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="ge">&ge;</option></select></div><div class="col-md-4 mb-3"><label class="form-label">Threshold</label><input type="number" class="form-control" id="rf-th" value="80"></div></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Severity</label><select class="form-select" id="rf-sev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div><div class="col-md-6 mb-3"><label class="form-label">Cooldown</label><input type="number" class="form-control" id="rf-cd" value="300"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveRule()">Save</button></div></div></div></div>');
+    pHTML('<div class="d-flex justify-content-between mb-3"><h3>Alert Rules</h3><div class="d-flex gap-2"><button class="btn btn-secondary" onclick="loadAlerts()"><i class="ti ti-arrow-left"></i> Back</button><button class="btn btn-primary" onclick="new bootstrap.Modal(document.getElementById(\'modal-rule\')).show()"><i class="ti ti-plus"></i> Add</button></div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Cooldown</th><th>Actions</th></tr></thead><tbody>'+rules.map(function(r){return '<tr><td class="fw-medium">'+esc(r.name)+'</td><td>'+r.metric_type+'</td><td><code>'+r.condition_op+' '+r.threshold+'</code></td><td><span class="badge bg-'+(r.severity==='critical'?'danger':'warning')+'">'+r.severity+'</span></td><td>'+r.cooldown_seconds+'s</td><td><button class="btn btn-ghost btn-sm text-danger" onclick="delRule('+r.id+')"><i class="ti ti-trash"></i></button></td></tr>';}).join('')+'</tbody></table></div></div><div class="modal fade" id="modal-rule" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Alert Rule</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="rf-name"></div><div class="row"><div class="col-md-5 mb-3"><label class="form-label">Metric</label><select class="form-select" id="rf-met"><option value="ping">Ping Latency</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="disk">Disk</option><option value="packet_loss">Packet Loss</option><option value="status">Status</option></select></div><div class="col-md-3 mb-3"><label class="form-label">Op</label><select class="form-select" id="rf-op"><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="ge">&ge;</option></select></div><div class="col-md-4 mb-3"><label class="form-label">Threshold</label><input type="number" class="form-control" id="rf-th" value="80"></div></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Severity</label><select class="form-select" id="rf-sev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div><div class="col-md-6 mb-3"><label class="form-label">Cooldown</label><input type="number" class="form-control" id="rf-cd" value="300"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveRule()">Save</button></div></div></div></div>');
   });
 }
 function saveRule(){
