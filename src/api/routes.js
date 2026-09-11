@@ -85,6 +85,14 @@ router.get('/devices/:id/ping', requireAuth, async (req, res) => {
   res.json(await pingPoller.pingHost(d.ip_address));
 });
 
+router.get('/devices/:id/snmp', requireAuth, async (req, res) => {
+  const d = db.prepare('SELECT * FROM devices WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  try {
+    res.json(await snmpPoller.pollDevice(d));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post('/devices/:id/refresh', requireAuth, async (req, res) => {
   const d = db.prepare('SELECT * FROM devices WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Not found' });

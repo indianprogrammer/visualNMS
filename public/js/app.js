@@ -234,6 +234,12 @@ function loadMap(mapId) {
 }
 var _linkMode=false,_linkSrc=null,_justDragged=false;
 function hideTopoMenu(){var m=document.getElementById('tpm-menu');if(m)m.remove();}
+function runTopoTool(title,promise){
+  document.getElementById('tool-modal-title').textContent=title;
+  document.getElementById('tool-out').textContent='Running...';
+  new bootstrap.Modal(document.getElementById('modal-tool')).show();
+  promise.then(function(out){document.getElementById('tool-out').textContent=out;}).catch(function(){document.getElementById('tool-out').textContent='Request failed.';});
+}
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
 function showTopoElMenu(px,py,el){
   hideTopoMenu();
@@ -247,11 +253,24 @@ function showTopoElMenu(px,py,el){
   if(did)h+='<button class="tpm-item" data-act="refresh">Refresh</button>';
   h+='<button class="tpm-item" data-act="delete">Delete</button>';
   h+='<button class="tpm-item" data-act="edit">Edit</button>';
+  if(did)h+='<div class="tpm-sep"></div><button class="tpm-item" data-act="tool-ping">PING</button><button class="tpm-item" data-act="tool-snmp">SNMP poller</button><button class="tpm-item" data-act="tool-ports">Port Scanner</button>';
   m.innerHTML=h;
   m.onclick=function(ev){
     var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
     var act=b.getAttribute('data-act');if(!act)return;
     if(act==='refresh'&&did){hideTopoMenu();toast('Refreshing...','info');api('/devices/'+did+'/refresh',{method:'POST'}).then(function(rr){toast('Status: '+rr.status+(rr.latencyMs!=null?' '+rr.latencyMs+'ms':''),rr.status==='up'?'success':'critical');});return;}
+    if(act==='tool-ping'&&did){hideTopoMenu();runTopoTool('PING - '+el.data('name'),api('/devices/'+did+'/ping').then(function(r){return 'Target : '+el.data('ip')+'\nStatus : '+(r.reachable?'REACHABLE':'UNREACHABLE')+'\nLatency: '+(r.latencyMs!=null?r.latencyMs+' ms':'-');}));return;}
+    if(act==='tool-snmp'&&did){hideTopoMenu();runTopoTool('SNMP poller - '+el.data('name'),api('/devices/'+did+'/snmp').then(function(r){
+      if(!r||r.error)return 'SNMP query failed'+(r&&r.error?': '+r.error:'')+'\nCheck community/credentials and that the device allows SNMP.';
+      var L=['Target : '+(r.ip||el.data('ip')),'Name   : '+(r.sysName||'-'),'Descr  : '+(r.sysDescr||'-'),'CPU    : '+(r.cpuLoad!=null?r.cpuLoad+' %':'-'),'Memory : '+(r.memoryPct!=null?r.memoryPct+' %':'-'),'Time   : '+(r.timestamp||'-'),'','Interfaces ('+(r.interfaces?r.interfaces.length:0)+'):'];
+      (r.interfaces||[]).forEach(function(i){L.push('  #'+i.if_index+' '+i.if_name+'  oper='+i.if_oper_status+'  speed='+(i.if_speed||0));});
+      return L.join('\n');
+    }));return;}
+    if(act==='tool-ports'&&did){hideTopoMenu();runTopoTool('Port Scanner - '+el.data('name'),api('/tools/portscan/'+encodeURIComponent(el.data('ip'))).then(function(r){
+      var list=(r&&(r.ports||r))||[];
+      if(!list.length)return 'Target : '+el.data('ip')+'\nNo results.';
+      return 'Target : '+(r.target||el.data('ip'))+'\n\n'+list.map(function(x){return '  '+x.port+'/tcp  '+x.state;}).join('\n');
+    }));return;}
     if(act==='delete'){if(!confirm('Remove this element from the map?'))return;hideTopoMenu();api('/maps/'+selectedMapId+'/nodes/'+nid,{method:'DELETE'}).then(function(){toast('Removed','success');});return;}
     if(act==='edit'){
       if(did){hideTopoMenu();editDevice(did);return;}
