@@ -168,7 +168,7 @@ document.getElementById('btn-save-dev').onclick=function(){
   var data={name:document.getElementById('df-name').value,ip_address:document.getElementById('df-ip').value,device_type:document.getElementById('df-type').value,snmp_version:document.getElementById('df-ver').value,snmp_community:document.getElementById('df-comm').value,snmp_port:parseInt(document.getElementById('df-port').value)||161,snmp_user:document.getElementById('df-user').value||null,snmp_auth_protocol:document.getElementById('df-authp').value,snmp_auth_pass:document.getElementById('df-authpw').value||null,snmp_priv_protocol:document.getElementById('df-privp').value,snmp_priv_pass:document.getElementById('df-privpw').value||null};
   if(!data.name||!data.ip_address){toast('Name and IP required','critical');return;}
   var p=id?api('/devices/'+id,{method:'PUT',body:data}):api('/devices',{method:'POST',body:data});
-  p.then(function(r){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');if(!id&&r&&r.id&&window._pendingMapPos&&selectedMapId&&currentPage==='topology'){var pp=window._pendingMapPos;window._pendingMapPos=null;api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:pp.x,y_position:pp.y}}).then(function(){toast('Node added','success');loadMap(selectedMapId);});}else{window._pendingMapPos=null;loadDevices();}}).catch(function(){toast('Error','critical');});
+  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');loadDevices();}).catch(function(){toast('Error','critical');});
 };
 
 // ═══ TOPOLOGY ═══
@@ -258,7 +258,17 @@ function showTopoMenu(px,py,pos){
     }
     var act=b.getAttribute('data-act');if(!act)return;
     if(act==='__back'){topoMenuMain(m,pos);return;}
-    if(act==='device'){window._pendingMapPos={x:Math.round(pos.x),y:Math.round(pos.y)};hideTopoMenu();openDevModal();return;}
+    if(act==='device'){
+      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Device name" autocomplete="off"><input id="tpm-ip" placeholder="IP address" autocomplete="off"><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-device">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
+    }
+    if(act==='go-device'){
+      var dn=m.querySelector('#tpm-name').value.trim(),di=m.querySelector('#tpm-ip').value.trim();
+      if(!dn||!di){toast('Name and IP required','critical');return;}
+      api('/devices',{method:'POST',body:{name:dn,ip_address:di}}).then(function(r){
+        if(!r||!r.id){toast(r&&r.error?r.error:'Error creating device','critical');return;}
+        api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:Math.round(pos.x),y_position:Math.round(pos.y)}}).then(function(){hideTopoMenu();toast('Device added','success');loadMap(selectedMapId);});
+      });return;
+    }
     if(act==='link'){hideTopoMenu();if(!_linkMode)topoLinkMode();else toast('Click source then target','info');return;}
     if(act==='go-network'){
       var nm=m.querySelector('#tpm-name').value.trim(),cidr=m.querySelector('#tpm-cidr').value.trim();
