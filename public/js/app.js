@@ -191,7 +191,7 @@ function loadMap(mapId) {
       {selector:'node.wireless_ap',style:{'shape':'ellipse'}},
       {selector:'node.network',style:{'shape':'ellipse','background-color':'#152238','border-style':'dashed','border-color':'#5b8fd4'}},
       {selector:'node.submap',style:{'background-color':'#1d2440','border-style':'double','border-color':'#7c8aff'}},
-      {selector:'node.static',style:{'background-color':'#23262c'}},
+      {selector:'node.static',style:{'shape':'ellipse','width':72,'height':72,'background-color':'#3a4152','border-color':'rgba(255,255,255,0.3)','text-max-width':'64px','font-size':'11px'}},
       {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':'#868a91','text-background-color':'#1a1d23','text-background-opacity':0.8}},
       {selector:'.down',style:{'line-color':'#e53e3e'}},
       {selector:'.up',style:{'line-color':'#2fb344'}},
@@ -303,7 +303,37 @@ document.getElementById('btn-ping-toggle').onclick=function(){
 };
 document.getElementById('modal-ping').addEventListener('hidden.bs.modal',function(){_pingActive=false;_pingRun++;syncPingBtn();});
 var _mtrRun=0,_mtrActive=false;
-function syncToolStop(){document.getElementById('btn-tool-stop').style.display=_mtrActive?'':'none';}
+var _snmpRun=0,_snmpActive=false;
+function syncToolStop(){document.getElementById('btn-tool-stop').style.display=(_mtrActive||_snmpActive)?'':'none';}
+function stopToolLoops(){_mtrActive=false;_mtrRun++;_snmpActive=false;_snmpRun++;syncToolStop();}
+function snmpTable(r,round){
+  var h='<div class="small text-muted mb-2">HOST: '+esc(r.ip||'')+' &middot; round '+round+' &middot; updated '+new Date().toLocaleTimeString()+'</div>';
+  h+='<div class="d-flex gap-3 mb-2 small"><span>CPU: <b class="text-white">'+(r.cpuLoad!=null?r.cpuLoad+' %':'-')+'</b></span><span>Memory: <b class="text-white">'+(r.memoryPct!=null?r.memoryPct+' %':'-')+'</b></span><span>Interfaces: <b class="text-white">'+(r.interfaces?r.interfaces.length:0)+'</b></span></div>';
+  h+='<div class="small text-muted mb-1">'+esc(r.sysName||'')+(r.sysDescr?' &middot; '+esc(String(r.sysDescr).slice(0,120)):'')+'</div>';
+  h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th></tr></thead><tbody>';
+  (r.interfaces||[]).forEach(function(i){
+    var op=i.if_oper_status==1?'<span class="text-success">up</span>':(i.if_oper_status==2?'<span class="text-danger">down</span>':'?');
+    h+='<tr><td>'+i.if_index+'</td><td><code>'+esc(i.if_name||'')+'</code></td><td>'+op+'</td><td>'+fmtS(i.if_speed||0)+'</td><td>'+fmtB(i.if_in_octets||0)+'</td><td>'+fmtB(i.if_out_octets||0)+'</td><td>'+((i.if_in_errors||0)+(i.if_out_errors||0))+'</td></tr>';
+  });
+  return h+'</tbody></table></div>';
+}
+function runSnmpTool(name,did){
+  var run=++_snmpRun;_mtrRun++;_snmpActive=true;
+  document.getElementById('tool-modal-title').textContent='SNMP poller - '+name;
+  syncToolStop();
+  new bootstrap.Modal(document.getElementById('modal-tool')).show();
+  snmpTick(did,run,0);
+}
+function snmpTick(did,run,round){
+  if(run!==_snmpRun||!_snmpActive)return;
+  if(round===0)document.getElementById('tool-out').textContent='Running...';
+  api('/devices/'+did+'/snmp').then(function(r){
+    if(run!==_snmpRun||!_snmpActive)return;
+    if(!r||r.error){document.getElementById('tool-out').textContent='SNMP query failed'+(r&&r.error?': '+r.error:'')+'.\nCheck community/credentials and that the device allows SNMP.';stopToolLoops();return;}
+    document.getElementById('tool-out').innerHTML=snmpTable(r,round+1);
+    setTimeout(function(){snmpTick(did,run,round+1);},5000);
+  }).catch(function(){if(run!==_snmpRun||!_snmpActive)return;document.getElementById('tool-out').textContent='Request failed.';stopToolLoops();});
+}
 function mtrTable(ip,hops,round){
   var h='<div class="small text-muted mb-2">HOST: '+esc(ip)+' &middot; round '+round+' &middot; stats over last 4 probes</div>';
   h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>#</th><th>Address</th><th>Loss</th><th>Sent</th><th>Last</th><th>Avg</th><th>Best</th><th>Worst</th></tr></thead><tbody>';
@@ -313,7 +343,7 @@ function mtrTable(ip,hops,round){
   return h+'</tbody></table></div>';
 }
 function runMtrTool(name,ip){
-  var run=++_mtrRun;_mtrActive=true;
+  var run=++_mtrRun;_snmpRun++;_mtrActive=true;
   document.getElementById('tool-modal-title').textContent='Traceroute (MTR) - '+name;
   syncToolStop();
   new bootstrap.Modal(document.getElementById('modal-tool')).show();
@@ -324,13 +354,13 @@ function mtrTick(ip,run,round){
   if(round===0)document.getElementById('tool-out').textContent='Running...';
   api('/tools/mtr/'+encodeURIComponent(ip)+'?cycles=4').then(function(r){
     if(run!==_mtrRun||!_mtrActive)return;
-    if(!r||!r.hops||!r.hops.length){document.getElementById('tool-out').textContent='MTR to '+ip+' failed'+(r&&r.error?': '+r.error:'')+'.';_mtrActive=false;_mtrRun++;syncToolStop();return;}
+    if(!r||!r.hops||!r.hops.length){document.getElementById('tool-out').textContent='MTR to '+ip+' failed'+(r&&r.error?': '+r.error:'')+'.';stopToolLoops();return;}
     document.getElementById('tool-out').innerHTML=mtrTable(ip,r.hops,round+1);
     mtrTick(ip,run,round+1);
-  }).catch(function(){if(run!==_mtrRun||!_mtrActive)return;document.getElementById('tool-out').textContent='Request failed.';_mtrActive=false;_mtrRun++;syncToolStop();});
+  }).catch(function(){if(run!==_mtrRun||!_mtrActive)return;document.getElementById('tool-out').textContent='Request failed.';stopToolLoops();});
 }
-document.getElementById('btn-tool-stop').onclick=function(){_mtrActive=false;_mtrRun++;syncToolStop();};
-document.getElementById('modal-tool').addEventListener('hidden.bs.modal',function(){_mtrActive=false;_mtrRun++;syncToolStop();});
+document.getElementById('btn-tool-stop').onclick=function(){stopToolLoops();};
+document.getElementById('modal-tool').addEventListener('hidden.bs.modal',function(){stopToolLoops();});
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
 function showTopoElMenu(px,py,el){
   hideTopoMenu();hideNodeTip();
@@ -352,12 +382,7 @@ function showTopoElMenu(px,py,el){
     if(act==='refresh'&&did){hideTopoMenu();toast('Refreshing...','info');api('/devices/'+did+'/refresh',{method:'POST'}).then(function(rr){toast('Status: '+rr.status+(rr.latencyMs!=null?' '+rr.latencyMs+'ms':''),rr.status==='up'?'success':'critical');});return;}
     if(act==='tool-ping'&&did){hideTopoMenu();runPingTool(el.data('name'),did,el.data('ip'));return;}
     if(act==='tool-trace'&&did){hideTopoMenu();runMtrTool(el.data('name'),el.data('ip'));return;}
-    if(act==='tool-snmp'&&did){hideTopoMenu();runTopoTool('SNMP poller - '+el.data('name'),api('/devices/'+did+'/snmp').then(function(r){
-      if(!r||r.error)return 'SNMP query failed'+(r&&r.error?': '+r.error:'')+'\nCheck community/credentials and that the device allows SNMP.';
-      var L=['Target : '+(r.ip||el.data('ip')),'Name   : '+(r.sysName||'-'),'Descr  : '+(r.sysDescr||'-'),'CPU    : '+(r.cpuLoad!=null?r.cpuLoad+' %':'-'),'Memory : '+(r.memoryPct!=null?r.memoryPct+' %':'-'),'Time   : '+(r.timestamp||'-'),'','Interfaces ('+(r.interfaces?r.interfaces.length:0)+'):'];
-      (r.interfaces||[]).forEach(function(i){var op=i.if_oper_status==1?'up':(i.if_oper_status==2?'down':'?');L.push('  #'+i.if_index+' '+i.if_name+'  '+op+'  '+fmtS(i.if_speed||0)+'  rx='+fmtB(i.if_in_octets||0)+' tx='+fmtB(i.if_out_octets||0));});
-      return L.join('\n');
-    }));return;}
+    if(act==='tool-snmp'&&did){hideTopoMenu();runSnmpTool(el.data('name'),did);return;}
     if(act==='tool-ports'&&did){hideTopoMenu();runTopoTool('Port Scanner - '+el.data('name'),api('/tools/portscan/'+encodeURIComponent(el.data('ip'))).then(function(r){
       var list=(r&&(r.ports||r))||[];
       if(!list.length)return 'Target : '+el.data('ip')+'\nNo results.';
@@ -424,15 +449,15 @@ function showTopoMenu(px,py,pos){
       topoMenuAddNode('network',nm+(cidr?'\n'+cidr:''),null,pos,m);return;
     }
     if(act==='go-static'){
-      var lb=m.querySelector('#tpm-name').value.trim(),ic=m.querySelector('#tpm-icon').value;
+      var lb=m.querySelector('#tpm-name').value.trim();
       if(!lb){toast('Label required','critical');return;}
-      topoMenuAddNode(ic,lb,null,pos,m);return;
+      topoMenuAddNode('static',lb,null,pos,m);return;
     }
     if(act==='network'){
       m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Network name" autocomplete="off"><input id="tpm-cidr" placeholder="CIDR e.g. 192.168.1.0/24" autocomplete="off"><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-network">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
     }
     if(act==='static'){
-      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Label" autocomplete="off"><select id="tpm-icon"><option value="generic">Generic</option><option value="router">Router</option><option value="switch">Switch</option><option value="server">Server</option><option value="wireless_ap">Wireless AP</option><option value="firewall">Firewall</option></select><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-static">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
+      m.innerHTML='<div class="tpm-form"><input id="tpm-name" placeholder="Label" autocomplete="off"><button class="btn btn-primary btn-sm w-100 mb-1" data-act="go-static">Add</button><button class="tpm-item tpm-back" data-act="__back">‹ Back</button></div>';return;
     }
     if(act==='submap'){
       api('/maps').then(function(maps){
@@ -448,7 +473,7 @@ function topoLinkMode(){_linkMode=!_linkMode;_linkSrc=null;toast(_linkMode?'Clic
 function topoAddNode(){api('/devices').then(function(devs){var pl=document.getElementById('topo-palette');document.getElementById('palette-list').innerHTML=devs.map(function(d){return '<div class="palette-item" title="'+esc(d.name)+'" onclick="addNode('+selectedMapId+','+d.id+')"><div class="device-icon '+d.device_type+'" style="width:28px;height:28px;font-size:.7rem"><i class="'+iconCls(d.device_type)+'"></i></div></div>';}).join('');pl.classList.add('visible');});}
 function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
-function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):(n.icon_name||'static')};}
+function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
 function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,label:l.label||''},classes:'device-link'};}
 function topoStyleNode(n){n.removeClass('down up');n.addClass(n.data('statusColor')==='#e53e3e'?'down':n.data('statusColor')==='#2fb344'?'up':'');renderNodeLabel(n);}
 function applyMapUpdate(u){
