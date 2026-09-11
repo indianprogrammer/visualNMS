@@ -483,7 +483,9 @@ function topoMenuMain(m,pos){
 function topoMenuAddNode(kind,label,extra,pos,m){
   var body={x_position:Math.round(pos.x),y_position:Math.round(pos.y),custom_label:label,icon_name:kind};
   if(extra)for(var k in extra)body[k]=extra[k];
-  api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:body}).then(function(){hideTopoMenu();toast('Added','success');loadMap(selectedMapId);});
+  // Server broadcasts map:updated node-added -> node appears without reload,
+  // keeping current zoom/pan. Full reload only as offline fallback.
+  api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:body}).then(function(){hideTopoMenu();toast('Added','success');if(!socket||!socket.connected)loadMap(selectedMapId);});
 }
 function showTopoMenu(px,py,pos){
   hideTopoMenu();hideNodeTip();
@@ -509,7 +511,7 @@ function showTopoMenu(px,py,pos){
       if(!dn||!di){toast('Name and IP required','critical');return;}
       api('/devices',{method:'POST',body:{name:dn,ip_address:di}}).then(function(r){
         if(!r||!r.id){toast(r&&r.error?r.error:'Error creating device','critical');return;}
-        api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:Math.round(pos.x),y_position:Math.round(pos.y)}}).then(function(){hideTopoMenu();toast('Device added','success');loadMap(selectedMapId);});
+        api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:Math.round(pos.x),y_position:Math.round(pos.y)}}).then(function(){hideTopoMenu();toast('Device added','success');if(!socket||!socket.connected)loadMap(selectedMapId);});
       });return;
     }
     if(act==='link'){hideTopoMenu();topoLinkLineHide();_linkSrc=null;_linkSrcIf=null;if(!_linkMode)topoLinkMode();else toast('Source cleared — click source element','info');return;}
@@ -623,7 +625,7 @@ function topoIfPicker(node,cb){
   });
 }
 function topoAddNode(){api('/devices').then(function(devs){var pl=document.getElementById('topo-palette');document.getElementById('palette-list').innerHTML=devs.map(function(d){return '<div class="palette-item" title="'+esc(d.name)+'" onclick="addNode('+selectedMapId+','+d.id+')"><div class="device-icon '+d.device_type+'" style="width:28px;height:28px;font-size:.7rem"><i class="'+iconCls(d.device_type)+'"></i></div></div>';}).join('');pl.classList.add('visible');});}
-function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');loadMap(mapId);});}
+function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');if(!socket||!socket.connected)loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
 function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',cpu:(n.cpu!=null?n.cpu:null),mem:(n.memory!=null?n.memory:null),disk:(n.disk!=null?n.disk:null),statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
 function topoLinkEl(l){return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),label:formatLinkLabel(l.rx_bps,l.tx_bps)},classes:'device-link'};}
