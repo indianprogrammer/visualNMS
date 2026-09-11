@@ -195,6 +195,35 @@ router.delete('/alert-rules/:id', requireAuth, (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ── SNMP Profiles ──
+const SNMP_PROFILE_COLS = ['name','snmp_version','snmp_community','snmp_port','snmp_user','snmp_auth_protocol','snmp_auth_pass','snmp_priv_protocol','snmp_priv_pass'];
+router.get('/snmp-profiles', requireAuth, (req, res) => {
+  res.json(db.prepare('SELECT * FROM snmp_profiles ORDER BY name').all());
+});
+
+router.post('/snmp-profiles', requireAuth, (req, res) => {
+  const b = req.body;
+  if (!b.name) return res.status(400).json({ error: 'name required' });
+  try {
+    const r = db.prepare(`INSERT INTO snmp_profiles (${SNMP_PROFILE_COLS.join(',')}) VALUES (?,?,?,?,?,?,?,?,?)`).run(b.name, b.snmp_version||'2c', b.snmp_community||null, b.snmp_port||161, b.snmp_user||null, b.snmp_auth_protocol||null, b.snmp_auth_pass||null, b.snmp_priv_protocol||null, b.snmp_priv_pass||null);
+    res.status(201).json({ id: r.lastInsertRowid, message: 'Created' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/snmp-profiles/:id', requireAuth, (req, res) => {
+  const b = req.body;
+  if (!b.name) return res.status(400).json({ error: 'name required' });
+  try {
+    db.prepare(`UPDATE snmp_profiles SET ${SNMP_PROFILE_COLS.map(c => c + '=?').join(',')} WHERE id=?`).run(b.name, b.snmp_version||'2c', b.snmp_community||null, b.snmp_port||161, b.snmp_user||null, b.snmp_auth_protocol||null, b.snmp_auth_pass||null, b.snmp_priv_protocol||null, b.snmp_priv_pass||null, req.params.id);
+    res.json({ message: 'Updated' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/snmp-profiles/:id', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM snmp_profiles WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
 // ── Events ──
 router.get('/events', requireAuth, (req, res) => {
   let sql = 'SELECT e.*,d.name as device_name FROM event_log e LEFT JOIN devices d ON e.device_id=d.id WHERE 1=1';

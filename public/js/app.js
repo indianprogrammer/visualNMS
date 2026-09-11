@@ -123,6 +123,14 @@ function openDevModal(dev){
   document.getElementById('df-type').value=dev?dev.device_type:'generic';
   document.getElementById('df-ver').value=dev?dev.snmp_version:'2c';
   document.getElementById('df-comm').value=dev?(dev.snmp_community||'public'):'public';
+  document.getElementById('df-port').value=dev?(dev.snmp_port||161):161;
+  document.getElementById('df-user').value=dev?(dev.snmp_user||''):'';
+  document.getElementById('df-authp').value=dev?(dev.snmp_auth_protocol||'none'):'none';
+  document.getElementById('df-authpw').value=dev?(dev.snmp_auth_pass||''):'';
+  document.getElementById('df-privp').value=dev?(dev.snmp_priv_protocol||'none'):'none';
+  document.getElementById('df-privpw').value=dev?(dev.snmp_priv_pass||''):'';
+  dfVerToggle();
+  api('/snmp-profiles').then(function(list){_snmpProfiles=list||[];var s=document.getElementById('df-profile');if(s){s.innerHTML='<option value="">— Manual —</option>'+_snmpProfiles.map(function(p){return '<option value="'+p.id+'">'+esc(p.name)+' (v'+p.snmp_version+')</option>';}).join('');s.value='';}}).catch(function(){});
   m.show();
 }
 function editDevice(id){api('/devices/'+id).then(function(d){openDevModal(d);}).catch(function(){});}
@@ -139,9 +147,25 @@ function viewDevice(id) {
   }).catch(function(e){console.error(e);toast('Error loading device','critical');});
 }
 function pingDev(id){toast('Pinging...','info');api('/devices/'+id+'/ping').then(function(r){toast('Ping: '+(r.reachable?'Reachable':'Down')+' '+r.latencyMs+'ms',r.reachable?'success':'critical');});}
+function dfVerToggle(){var v=document.getElementById('df-ver').value;document.getElementById('df-v3-rows').style.display=v==='3'?'':'none';}
+document.getElementById('df-ver').onchange=dfVerToggle;
+document.getElementById('df-profile').onchange=function(){
+  var pid=this.value;if(!pid)return;
+  var p=_snmpProfiles.filter(function(x){return String(x.id)===String(pid);})[0];if(!p)return;
+  document.getElementById('df-ver').value=p.snmp_version;
+  document.getElementById('df-port').value=p.snmp_port||161;
+  document.getElementById('df-comm').value=p.snmp_community||'public';
+  document.getElementById('df-user').value=p.snmp_user||'';
+  document.getElementById('df-authp').value=p.snmp_auth_protocol||'none';
+  document.getElementById('df-authpw').value=p.snmp_auth_pass||'';
+  document.getElementById('df-privp').value=p.snmp_priv_protocol||'none';
+  document.getElementById('df-privpw').value=p.snmp_priv_pass||'';
+  dfVerToggle();
+  toast('Profile "'+p.name+'" applied','success');
+};
 document.getElementById('btn-save-dev').onclick=function(){
   var id=document.getElementById('df-id').value;
-  var data={name:document.getElementById('df-name').value,ip_address:document.getElementById('df-ip').value,device_type:document.getElementById('df-type').value,snmp_version:document.getElementById('df-ver').value,snmp_community:document.getElementById('df-comm').value};
+  var data={name:document.getElementById('df-name').value,ip_address:document.getElementById('df-ip').value,device_type:document.getElementById('df-type').value,snmp_version:document.getElementById('df-ver').value,snmp_community:document.getElementById('df-comm').value,snmp_port:parseInt(document.getElementById('df-port').value)||161,snmp_user:document.getElementById('df-user').value||null,snmp_auth_protocol:document.getElementById('df-authp').value,snmp_auth_pass:document.getElementById('df-authpw').value||null,snmp_priv_protocol:document.getElementById('df-privp').value,snmp_priv_pass:document.getElementById('df-privpw').value||null};
   if(!data.name||!data.ip_address){toast('Name and IP required','critical');return;}
   var p=id?api('/devices/'+id,{method:'PUT',body:data}):api('/devices',{method:'POST',body:data});
   p.then(function(r){bootstrap.Modal.getInstance(document.getElementById('modal-device')).hide();toast(id?'Updated':'Created','success');if(!id&&r&&r.id&&window._pendingMapPos&&selectedMapId&&currentPage==='topology'){var pp=window._pendingMapPos;window._pendingMapPos=null;api('/maps/'+selectedMapId+'/nodes',{method:'POST',body:{device_id:r.id,x_position:pp.x,y_position:pp.y}}).then(function(){toast('Node added','success');loadMap(selectedMapId);});}else{window._pendingMapPos=null;loadDevices();}}).catch(function(){toast('Error','critical');});
@@ -382,8 +406,44 @@ function renderLogs(logs){var b=document.getElementById('log-box');if(!b)return;
 
 // ═══ SETTINGS ═══
 function loadSettings(){
-  pHTML('<div class="row"><div class="col-lg-6"><div class="card mb-3"><div class="card-header"><h3 class="card-title">General</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Polling Interval (ms)</label><input type="number" class="form-control" value="10000"></div><div class="mb-3"><label class="form-label">SNMP Timeout (ms)</label><input type="number" class="form-control" value="5000"></div><button class="btn btn-primary">Save</button></div></div></div><div class="col-lg-6"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Notifications</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Webhook URL</label><input type="text" class="form-control" placeholder="https://hooks..."></div><div class="mb-3"><label class="form-label">Telegram Bot Token</label><input type="text" class="form-control" placeholder="Token"></div><div class="mb-3"><label class="form-label">Telegram Chat ID</label><input type="text" class="form-control" placeholder="Chat ID"></div><div class="mb-3"><label class="form-label">SMTP Host</label><input type="text" class="form-control" placeholder="smtp.example.com"></div><div class="mb-3"><label class="form-label">Alert Email To</label><input type="email" class="form-control" placeholder="admin@example.com"></div><button class="btn btn-primary">Save</button></div></div></div></div><div class="card"><div class="card-header"><h3 class="card-title">Data Retention</h3></div><div class="card-body"><div class="row"><div class="col-md-4 mb-3"><label class="form-label">Retain (days)</label><input type="number" class="form-control" value="365"></div><div class="col-md-4 mb-3"><label class="form-label">Aggregate after (days)</label><input type="number" class="form-control" value="30"></div></div><button class="btn btn-primary">Save</button></div></div>');
+  pHTML('<div class="row"><div class="col-lg-6"><div class="card mb-3"><div class="card-header"><h3 class="card-title">General</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Polling Interval (ms)</label><input type="number" class="form-control" value="10000"></div><div class="mb-3"><label class="form-label">SNMP Timeout (ms)</label><input type="number" class="form-control" value="5000"></div><button class="btn btn-primary">Save</button></div></div></div><div class="col-lg-6"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Notifications</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Webhook URL</label><input type="text" class="form-control" placeholder="https://hooks..."></div><div class="mb-3"><label class="form-label">Telegram Bot Token</label><input type="text" class="form-control" placeholder="Token"></div><div class="mb-3"><label class="form-label">Telegram Chat ID</label><input type="text" class="form-control" placeholder="Chat ID"></div><div class="mb-3"><label class="form-label">SMTP Host</label><input type="text" class="form-control" placeholder="smtp.example.com"></div><div class="mb-3"><label class="form-label">Alert Email To</label><input type="email" class="form-control" placeholder="admin@example.com"></div><button class="btn btn-primary">Save</button></div></div></div></div><div class="card"><div class="card-header"><h3 class="card-title">Data Retention</h3></div><div class="card-body"><div class="row"><div class="col-md-4 mb-3"><label class="form-label">Retain (days)</label><input type="number" class="form-control" value="365"></div><div class="col-md-4 mb-3"><label class="form-label">Aggregate after (days)</label><input type="number" class="form-control" value="30"></div></div><button class="btn btn-primary">Save</button></div></div><div class="card mt-3"><div class="card-header"><h3 class="card-title">SNMP Profiles</h3><div class="ms-auto"><button class="btn btn-primary btn-sm" onclick="openSnmpModal()"><i class="ti ti-plus"></i> Add Profile</button></div></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Version</th><th>Community / User</th><th>Port</th><th>Actions</th></tr></thead><tbody id="snmp-tb"></tbody></table></div></div>');
+  loadSnmpProfiles();
 }
+
+// ═══ SNMP PROFILES ═══
+var _snmpProfiles=[];
+function loadSnmpProfiles(){
+  api('/snmp-profiles').then(function(list){
+    _snmpProfiles=list||[];
+    var tb=document.getElementById('snmp-tb');if(!tb)return;
+    tb.innerHTML=_snmpProfiles.map(function(p){return '<tr><td class="fw-medium">'+esc(p.name)+'</td><td>v'+p.snmp_version+'</td><td><code>'+esc(p.snmp_version==='3'?(p.snmp_user||'-'):(p.snmp_community||'-'))+'</code></td><td>'+p.snmp_port+'</td><td><div class="btn-list flex-nowrap"><button class="btn btn-ghost btn-sm" onclick="openSnmpModal('+p.id+')"><i class="ti ti-pencil"></i></button><button class="btn btn-ghost btn-sm text-danger" onclick="delSnmpProfile('+p.id+')"><i class="ti ti-trash"></i></button></div></td></tr>';}).join('')||'<tr><td colspan="5" class="text-muted text-center">No profiles</td></tr>';
+  }).catch(function(){});
+}
+function snmpVerToggle(){var v=document.getElementById('sp-ver').value;document.getElementById('sp-v3-rows').style.display=v==='3'?'':'none';document.getElementById('sp-comm-row').style.display=v==='3'?'none':'';}
+function openSnmpModal(id){
+  var p=id?_snmpProfiles.filter(function(x){return x.id===id;})[0]:null;
+  document.getElementById('snmp-modal-title').textContent=p?'Edit SNMP Profile':'Add SNMP Profile';
+  document.getElementById('sp-id').value=p?p.id:'';
+  document.getElementById('sp-name').value=p?p.name:'';
+  document.getElementById('sp-ver').value=p?p.snmp_version:'2c';
+  document.getElementById('sp-port').value=p?p.snmp_port:161;
+  document.getElementById('sp-comm').value=p?(p.snmp_community||'public'):'public';
+  document.getElementById('sp-user').value=p?(p.snmp_user||''):'';
+  document.getElementById('sp-authp').value=p?(p.snmp_auth_protocol||'none'):'none';
+  document.getElementById('sp-authpw').value=p?(p.snmp_auth_pass||''):'';
+  document.getElementById('sp-privp').value=p?(p.snmp_priv_protocol||'none'):'none';
+  document.getElementById('sp-privpw').value=p?(p.snmp_priv_pass||''):'';
+  snmpVerToggle();
+  new bootstrap.Modal(document.getElementById('modal-snmp')).show();
+}
+function delSnmpProfile(id){if(!confirm('Delete this SNMP profile?'))return;api('/snmp-profiles/'+id,{method:'DELETE'}).then(function(){toast('Deleted','success');loadSnmpProfiles();});}
+document.getElementById('btn-save-snmp').onclick=function(){
+  var id=document.getElementById('sp-id').value;
+  var data={name:document.getElementById('sp-name').value.trim(),snmp_version:document.getElementById('sp-ver').value,snmp_port:parseInt(document.getElementById('sp-port').value)||161,snmp_community:document.getElementById('sp-comm').value,snmp_user:document.getElementById('sp-user').value,snmp_auth_protocol:document.getElementById('sp-authp').value,snmp_auth_pass:document.getElementById('sp-authpw').value,snmp_priv_protocol:document.getElementById('sp-privp').value,snmp_priv_pass:document.getElementById('sp-privpw').value};
+  if(!data.name){toast('Name required','critical');return;}
+  var p=id?api('/snmp-profiles/'+id,{method:'PUT',body:data}):api('/snmp-profiles',{method:'POST',body:data});
+  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-snmp')).hide();toast(id?'Updated':'Created','success');loadSnmpProfiles();}).catch(function(e){toast('Error: duplicate name?','critical');});
+};
 
 // ═══ BOOT ═══
 if (AUTH_TOKEN) { try { startApp(); } catch(e){ showLogin(); } } else { showLogin(); }

@@ -160,6 +160,21 @@ CREATE TABLE IF NOT EXISTS event_log (
 );
 CREATE INDEX IF NOT EXISTS idx_el_time ON event_log(created_at);
 
+CREATE TABLE IF NOT EXISTS snmp_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  snmp_version TEXT DEFAULT '2c',
+  snmp_community TEXT,
+  snmp_port INTEGER DEFAULT 161,
+  snmp_user TEXT,
+  snmp_auth_protocol TEXT,
+  snmp_auth_pass TEXT,
+  snmp_priv_protocol TEXT,
+  snmp_priv_pass TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO snmp_profiles (id,name,snmp_version,snmp_community,snmp_port) VALUES (1,'Default v2c','2c','public',161);
+
 CREATE TABLE IF NOT EXISTS discovery_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   subnet TEXT NOT NULL,
