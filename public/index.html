@@ -1,19 +1,21 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="dark" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Web-NMS</title>
+  <script>(function(){try{var t=localStorage.getItem('webnms_theme')||'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){}})();</script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler-vendors.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.46.0/dist/tabler-icons.min.css">
-  <link rel="stylesheet" href="/css/app.css?v=20260912k">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="/css/app.css?v=20260912l">
 </head>
 <body>
   <div id="login-root"></div>
 
   <div class="page" id="app-root" style="display:none">
-    <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+    <aside class="navbar navbar-vertical navbar-expand-lg">
       <div class="container-fluid">
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu">
           <span class="navbar-toggler-icon"></span>
@@ -32,7 +34,7 @@
             <li class="nav-item"><a class="nav-link" href="#" data-page="logs"><i class="nav-icon ti ti-list"></i><span class="nav-link-title">Event Log</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="nav-icon ti ti-settings"></i><span class="nav-link-title">Settings</span></a></li>
           </ul>
-          <div class="mt-auto pb-3 px-3"><button class="btn btn-ghost btn-sm w-100" id="btn-logout"><i class="ti ti-logout me-1"></i>Logout</button></div>
+          <div class="mt-auto pb-3 px-3 d-flex flex-column gap-2"><button class="btn btn-ghost btn-sm w-100" id="btn-theme" onclick="toggleTheme()"><i class="ti ti-sun me-1"></i><span>Theme</span></button><button class="btn btn-ghost btn-sm w-100" id="btn-logout"><i class="ti ti-logout me-1"></i>Logout</button></div>
         </div>
       </div>
     </aside>
@@ -85,7 +87,7 @@
   <div class="modal modal-blur fade" id="modal-ping" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title" id="ping-modal-title">PING</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
-      <div class="d-flex gap-3 mb-2 small text-muted"><span>Sent: <b class="text-white" id="ping-sent">0</b></span><span>OK: <b class="text-success" id="ping-ok">0</b></span><span>Fail: <b class="text-danger" id="ping-fail">0</b></span><span>Loss: <b class="text-warning" id="ping-loss">0%</b></span><span>Avg: <b class="text-white" id="ping-avg">-</b></span></div>
+      <div class="d-flex gap-3 mb-2 small text-muted"><span>Sent: <b id="ping-sent">0</b></span><span>OK: <b class="text-success" id="ping-ok">0</b></span><span>Fail: <b class="text-danger" id="ping-fail">0</b></span><span>Loss: <b class="text-warning" id="ping-loss">0%</b></span><span>Avg: <b id="ping-avg">-</b></span></div>
       <div class="progress mb-2" style="height:10px"><div id="ping-bar-ok" class="progress-bar bg-success" style="width:0%"></div><div id="ping-bar-fail" class="progress-bar bg-danger" style="width:0%"></div></div>
       <div class="mb-2" style="height:150px"><canvas id="ping-chart"></canvas></div>
       <pre class="tool-output" id="ping-out" style="max-height:220px;overflow-y:auto;margin:0"></pre>
@@ -106,6 +108,6 @@
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape-grid-guide@2.3.3/cytoscape-grid-guide.js"></script>
-  <script src="/js/app.js?v=20260912k"></script>
+  <script src="/js/app.js?v=20260912l"></script>
 </body>
 </html>

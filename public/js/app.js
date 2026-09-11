@@ -55,6 +55,20 @@ if(!window._topoDelBound){window._topoDelBound=true;document.addEventListener('k
 });}
 function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',server:'ti ti-server',wireless_ap:'ti ti-antenna',firewall:'ti ti-shield',printer:'ti ti-printer',ont:'ti ti-cable'}[t]||'ti ti-device-desktop'; }
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
+// ── Theme (futuristic dark/light) ──
+function themeName(){return document.documentElement.getAttribute('data-theme')||'dark';}
+function thGrid(){return themeName()==='light'?'#d7e0ea':'#1b2942';}
+function thTick(){return themeName()==='light'?'#5b6b7c':'#7d8db0';}
+function thText(){return themeName()==='light'?'#16202e':'#d7e3f4';}
+function thLabel(){return themeName()==='light'?'#16202e':'#ffffff';}
+function thEdgeLabelBg(){return themeName()==='light'?'#ffffff':'#0a1120';}
+function thNetworkBg(){return themeName()==='light'?'#dbe7f5':'#152238';}
+function thSubmapBg(){return themeName()==='light'?'#e3e9f7':'#1d2440';}
+function thStaticBg(){return themeName()==='light'?'#64748b':'#3a4152';}
+function syncThemeBtn(){var b=document.getElementById('btn-theme');if(b)b.innerHTML='<i class="ti '+(themeName()==='light'?'ti-moon':'ti-sun')+' me-1"></i><span>Theme</span>';}
+function initTheme(){try{if(!localStorage.getItem('webnms_theme'))localStorage.setItem('webnms_theme','dark');}catch(e){}syncThemeBtn();}
+function toggleTheme(){var t=themeName()==='light'?'dark':'light';try{localStorage.setItem('webnms_theme',t);}catch(e){}document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);syncThemeBtn();if(currentPage)refreshForTheme();}
+function refreshForTheme(){try{if(currentPage==='topology'&&selectedMapId){loadMap(selectedMapId);}else{navigateTo(currentPage);}}catch(e){}}
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
 function fmtS(b) { if(b==null) return '-'; if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return Math.round(b)+' bps'; }
 function formatLinkLabel(rxBps,txBps,statTxt) {
@@ -157,8 +171,8 @@ function loadDashboard() {
     e=document.getElementById('s-alerts');if(e)e.textContent=s.activeAlerts;
     e=document.getElementById('d-alerts');if(e)e.innerHTML=al.length?al.map(function(a){return '<div class="d-flex align-items-center p-2 border-bottom"><span class="status-dot '+(a.severity==='critical'?'down':'up')+'"></span><div class="flex-fill"><div class="fw-medium">'+esc(a.message)+'</div><div class="text-muted small">'+esc(a.device_name||'System')+' &middot; '+new Date(a.created_at).toLocaleString()+'</div></div></div>';}).join(''):'<div class="p-3 text-muted text-center">No alerts</div>';
     e=document.getElementById('d-devs');if(e)e.innerHTML=dv.map(function(d){return '<div class="d-flex align-items-center p-2 border-bottom" style="cursor:pointer" onclick="viewDevice('+d.id+')"><div class="device-icon '+d.device_type+'"><i class="'+iconCls(d.device_type)+'"></i></div><div class="flex-fill ms-2"><div class="fw-medium">'+esc(d.name)+'</div><div class="text-muted small">'+d.ip_address+'</div></div><span class="status-dot '+d.status+'"></span></div>';}).join('');
-    dChart('status');var se=document.getElementById('ch-status');if(se)charts.status=new Chart(se,{type:'doughnut',data:{labels:['Up','Down','Unknown'],datasets:[{data:[s.up,s.down,s.unknown],backgroundColor:['#2fb344','#e53e3e','#868a91'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#c2c7d0'}}}}});
-    dChart('traffic');var te=document.getElementById('ch-traffic');if(te){var now=Date.now(),lb=[];for(var i=29;i>=0;i--)lb.push(new Date(now-i*60000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));var rx=[],tx=[];for(var i=0;i<30;i++){rx.push(Math.random()*100);tx.push(Math.random()*80);}charts.traffic=new Chart(te,{type:'line',data:{labels:lb,datasets:[{label:'Rx',data:rx,borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0},{label:'Tx',data:tx,borderColor:'#357bfd',backgroundColor:'#357bfd22',fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});}
+    dChart('status');var se=document.getElementById('ch-status');if(se)charts.status=new Chart(se,{type:'doughnut',data:{labels:['Up','Down','Unknown'],datasets:[{data:[s.up,s.down,s.unknown],backgroundColor:['#2fb344','#e53e3e','#868a91'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:thText()}}}}});
+    dChart('traffic');var te=document.getElementById('ch-traffic');if(te){var now=Date.now(),lb=[];for(var i=29;i>=0;i--)lb.push(new Date(now-i*60000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));var rx=[],tx=[];for(var i=0;i<30;i++){rx.push(Math.random()*100);tx.push(Math.random()*80);}charts.traffic=new Chart(te,{type:'line',data:{labels:lb,datasets:[{label:'Rx',data:rx,borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0},{label:'Tx',data:tx,borderColor:'#357bfd',backgroundColor:'#357bfd22',fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:thGrid()},ticks:{color:thTick()}}},plugins:{legend:{labels:{color:thText()}}}}});}
   }).catch(function(e){console.error('Dashboard:',e);});
 }
 function liveDash(r){var u=0,d=0;r.forEach(function(x){if(x.ping&&x.ping.reachable)u++;else d++;});var e;e=document.getElementById('s-up');if(e)e.textContent=u;e=document.getElementById('s-down');if(e)e.textContent=d;}
@@ -230,8 +244,8 @@ function viewDevice(id) {
     var pd=mx.filter(function(m){return m.metric_type==='ping';}).reverse();
     var cd=mx.filter(function(m){return m.metric_type==='cpu';}).reverse();
     var md=mx.filter(function(m){return m.metric_type==='memory';}).reverse();
-    dChart('ping');var pe=document.getElementById('ch-ping');if(pe)charts.ping=new Chart(pe,{type:'line',data:{labels:pd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'ms',data:pd.map(function(m){return m.value;}),borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});
-    dChart('cpu');var ce=document.getElementById('ch-cpu');if(ce)charts.cpu=new Chart(ce,{type:'line',data:{labels:cd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'CPU%',data:cd.map(function(m){return m.value;}),borderColor:'#f59f00',tension:.3,pointRadius:2},{label:'Mem%',data:md.map(function(m){return m.value;}),borderColor:'#ae3ec9',tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{min:0,max:100,grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{labels:{color:'#c2c7d0'}}}}});
+    dChart('ping');var pe=document.getElementById('ch-ping');if(pe)charts.ping=new Chart(pe,{type:'line',data:{labels:pd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'ms',data:pd.map(function(m){return m.value;}),borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{grid:{color:thGrid()},ticks:{color:thTick()}}},plugins:{legend:{labels:{color:thText()}}}}});
+    dChart('cpu');var ce=document.getElementById('ch-cpu');if(ce)charts.cpu=new Chart(ce,{type:'line',data:{labels:cd.map(function(m){return new Date(m.timestamp).toLocaleTimeString();}),datasets:[{label:'CPU%',data:cd.map(function(m){return m.value;}),borderColor:'#f59f00',tension:.3,pointRadius:2},{label:'Mem%',data:md.map(function(m){return m.value;}),borderColor:'#ae3ec9',tension:.3,pointRadius:2}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{display:false},y:{min:0,max:100,grid:{color:thGrid()},ticks:{color:thTick()}}},plugins:{legend:{labels:{color:thText()}}}}});
   }).catch(function(e){console.error(e);toast('Error loading device','critical');});
 }
 function pingDev(id){toast('Pinging...','info');api('/devices/'+id+'/ping').then(function(r){toast('Ping: '+(r.reachable?'Reachable':'Down')+' '+r.latencyMs+'ms',r.reachable?'success':'critical');});}
@@ -276,13 +290,13 @@ function loadMap(mapId) {
     md.nodes.forEach(function(n){els.push(topoNodeEl(n));});
     md.links.forEach(function(l){els.push(topoLinkEl(l));});
     cy=cytoscape({container:document.getElementById('cy-topo'),elements:els,layout:{name:'preset'},zoom:1,minZoom:0.1,maxZoom:4,boxSelectionEnabled:false,autoungrabify:false,autounselectify:false,userZoomingEnabled:true,userPanningEnabled:true,style:[
-      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':70,'font-size':'12px','font-weight':'bold','color':'#fff','text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
+      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':70,'font-size':'12px','font-weight':'bold','color':thLabel(),'text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
       {selector:'node:grabbed',style:{'cursor':'grabbing','border-width':3,'border-color':'#357bfd'}},
       {selector:'node.wireless_ap',style:{'shape':'ellipse'}},
-      {selector:'node.network',style:{'shape':'ellipse','background-color':'#152238','border-style':'dashed','border-color':'#5b8fd4'}},
-      {selector:'node.submap',style:{'background-color':'#1d2440','border-style':'double','border-color':'#7c8aff'}},
-      {selector:'node.static',style:{'shape':'ellipse','width':22,'height':22,'background-color':'#3a4152','border-color':'rgba(255,255,255,0.3)','font-size':'11px','text-max-width':'120px'}},
-      {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':'#c2c7d0','text-background-color':'#1a1d23','text-background-opacity':0.9,'text-wrap':'wrap','edge-text-rotation':'autorotate','text-margin-y':-12,'text-outline-width':0}},
+      {selector:'node.network',style:{'shape':'ellipse','background-color':thNetworkBg(),'border-style':'dashed','border-color':'#5b8fd4'}},
+      {selector:'node.submap',style:{'background-color':thSubmapBg(),'border-style':'double','border-color':'#7c8aff'}},
+      {selector:'node.static',style:{'shape':'ellipse','width':22,'height':22,'background-color':thStaticBg(),'border-color':'rgba(255,255,255,0.3)','font-size':'11px','text-max-width':'120px'}},
+      {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':thText(),'text-background-color':thEdgeLabelBg(),'text-background-opacity':0.9,'text-wrap':'wrap','edge-text-rotation':'autorotate','text-margin-y':-12,'text-outline-width':0}},
       {selector:'.down',style:{'line-color':'#e53e3e'}},
       {selector:'.up',style:{'line-color':'#2fb344'}},
       {selector:':selected',style:{'border-width':3,'border-color':'#357bfd'}}
@@ -352,7 +366,7 @@ function pingChartInit(){
   if(_pingChart){_pingChart.destroy();_pingChart=null;}
   _pingLabels=[];_pingLat=[];
   var c=document.getElementById('ping-chart');
-  if(c&&typeof Chart!=='undefined')_pingChart=new Chart(c,{type:'line',data:{labels:[],datasets:[{label:'ms',data:[],borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{display:false},y:{min:0,grid:{color:'#2d3139'},ticks:{color:'#868a91'}}},plugins:{legend:{display:false}}}});
+  if(c&&typeof Chart!=='undefined')_pingChart=new Chart(c,{type:'line',data:{labels:[],datasets:[{label:'ms',data:[],borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{display:false},y:{min:0,grid:{color:thGrid()},ticks:{color:thTick()}}},plugins:{legend:{display:false}}}});
 }
 function syncPingStats(){
   var s=_pingStats||{sent:0,ok:0,fail:0,latSum:0};
@@ -404,7 +418,7 @@ function syncToolStop(){document.getElementById('btn-tool-stop').style.display=(
 function stopToolLoops(){_mtrActive=false;_mtrRun++;_snmpActive=false;_snmpRun++;syncToolStop();}
 function snmpTable(r,round){
   var h='<div class="small text-muted mb-2">HOST: '+esc(r.ip||'')+' &middot; round '+round+' &middot; updated '+new Date().toLocaleTimeString()+'</div>';
-  h+='<div class="d-flex gap-3 mb-2 small"><span>CPU: <b class="text-white">'+(r.cpuLoad!=null?r.cpuLoad+' %':'-')+'</b></span><span>Memory: <b class="text-white">'+(r.memoryPct!=null?r.memoryPct+' %':'-')+'</b></span><span>Interfaces: <b class="text-white">'+(r.interfaces?r.interfaces.length:0)+'</b></span></div>';
+  h+='<div class="d-flex gap-3 mb-2 small"><span>CPU: <b>'+(r.cpuLoad!=null?r.cpuLoad+' %':'-')+'</b></span><span>Memory: <b>'+(r.memoryPct!=null?r.memoryPct+' %':'-')+'</b></span><span>Interfaces: <b>'+(r.interfaces?r.interfaces.length:0)+'</b></span></div>';
   h+='<div class="small text-muted mb-1">'+esc(r.sysName||'')+(r.sysDescr?' &middot; '+esc(String(r.sysDescr).slice(0,120)):'')+'</div>';
   h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th></tr></thead><tbody>';
   (r.interfaces||[]).forEach(function(i){
@@ -852,8 +866,8 @@ function showLinkTip(e){
         {label:'Rx',data:rxD,borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0,borderWidth:1.5},
         {label:'Tx',data:txD,borderColor:'#357bfd',backgroundColor:'#357bfd22',fill:true,tension:.3,pointRadius:0,borderWidth:1.5}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,
-        scales:{x:{display:true,grid:{color:'#2d3139'},ticks:{color:'#868a91',maxTicksLimit:6,maxRotation:45,minRotation:0,font:{size:10}}},y:{min:0,grid:{color:'#2d3139'},ticks:{color:'#868a91',maxTicksLimit:4,callback:function(v){return fmtS(v);}}}},
-        plugins:{legend:{position:'top',align:'end',labels:{color:'#c2c7d0',boxWidth:12,font:{size:10}}}}}});
+        scales:{x:{display:true,grid:{color:thGrid()},ticks:{color:thTick(),maxTicksLimit:6,maxRotation:45,minRotation:0,font:{size:10}}},y:{min:0,grid:{color:thGrid()},ticks:{color:thTick(),maxTicksLimit:4,callback:function(v){return fmtS(v);}}}},
+        plugins:{legend:{position:'top',align:'end',labels:{color:thText(),boxWidth:12,font:{size:10}}}}}});
   }).catch(function(){if(run!==_linkTipRun)return;var st=document.getElementById('link-tip-status');if(st)st.textContent='Graph unavailable.';});
 }
 function nodeTipHTML(n){
@@ -866,9 +880,9 @@ function nodeTipHTML(n){
   h+='<div>Status: <span style="color:'+d.statusColor+';font-weight:600">'+esc(capTip(d.statusText||'unknown'))+'</span></div>';
   if(d.cpu!=null||d.mem!=null||d.disk!=null){
     h+='<div class="mt-1">'
-      +(d.cpu!=null?'<div>CPU: <b class="text-white">'+d.cpu+' %</b></div>':'')
-      +(d.mem!=null?'<div>Memory: <b class="text-white">'+d.mem+' %</b></div>':'')
-      +(d.disk!=null?'<div>Disk: <b class="text-white">'+d.disk+' %</b></div>':'')
+      +(d.cpu!=null?'<div>CPU: <b>'+d.cpu+' %</b></div>':'')
+      +(d.mem!=null?'<div>Memory: <b>'+d.mem+' %</b></div>':'')
+      +(d.disk!=null?'<div>Disk: <b>'+d.disk+' %</b></div>':'')
       +'</div>';
   }
   return h;
@@ -1046,4 +1060,5 @@ document.getElementById('btn-save-snmp').onclick=function(){
 };
 
 // ═══ BOOT ═══
+initTheme();
 if (AUTH_TOKEN) { try { startApp(); } catch(e){ showLogin(); } } else { showLogin(); }
