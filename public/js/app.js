@@ -67,7 +67,7 @@ function thEdgeLabelBg(){return themeName()==='light'?'#ffffff':'#0a1120';}
 function thNetworkBg(){return themeName()==='light'?'#dbe7f5':'#152238';}
 function thSubmapBg(){return themeName()==='light'?'#e3e9f7':'#1d2440';}
 function thStaticBg(){return themeName()==='light'?'#64748b':'#3a4152';}
-function syncThemeBtn(){var b=document.getElementById('theme-name');if(b)b.textContent=themeDef(themeName()).name;}
+function syncThemeBtn(){var n=themeDef(themeName()).name;document.querySelectorAll('.theme-name').forEach(function(b){b.textContent=n;});}
 function initTheme(){var t='dark';try{t=localStorage.getItem('webnms_theme')||'dark';}catch(e){}setTheme(t,true);}
 function setTheme(id,silent){var d=themeDef(id);try{localStorage.setItem('webnms_theme',d.id);}catch(e){}document.documentElement.setAttribute('data-theme',d.id);document.documentElement.setAttribute('data-bs-theme',d.bs);syncThemeBtn();if(!silent&&currentPage)refreshForTheme();}
 function toggleTheme(){setTheme(themeName()==='light'?'dark':'light');}

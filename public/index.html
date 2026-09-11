@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler-vendors.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.46.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap">
-  <link rel="stylesheet" href="/css/app.css?v=20260912m">
+  <link rel="stylesheet" href="/css/app.css?v=20260912n">
 </head>
 <body>
   <div id="login-root"></div>
@@ -34,12 +34,12 @@
             <li class="nav-item"><a class="nav-link" href="#" data-page="logs"><i class="nav-icon ti ti-list"></i><span class="nav-link-title">Event Log</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="nav-icon ti ti-settings"></i><span class="nav-link-title">Settings</span></a></li>
           </ul>
-          <div class="mt-auto pb-3 px-3 d-flex flex-column gap-2"><div class="dropup"><button class="btn btn-ghost btn-sm w-100 dropdown-toggle" data-bs-toggle="dropdown"><i class="ti ti-palette me-1"></i><span id="theme-name">Theme</span></button><div class="dropdown-menu"><button class="dropdown-item" onclick="setTheme('dark')">Cyber Dark</button><button class="dropdown-item" onclick="setTheme('light')">Arctic Light</button><button class="dropdown-item" onclick="setTheme('midnight')">Midnight Violet</button><button class="dropdown-item" onclick="setTheme('matrix')">Matrix Green</button><button class="dropdown-item" onclick="setTheme('ember')">Ember Orange</button></div></div><button class="btn btn-ghost btn-sm w-100" id="btn-logout"><i class="ti ti-logout me-1"></i>Logout</button></div>
+          <div class="mt-auto pb-3 px-3 d-flex flex-column gap-2"><div class="dropup"><button class="btn btn-ghost btn-sm w-100 dropdown-toggle" data-bs-toggle="dropdown"><i class="ti ti-palette me-1"></i><span class="theme-name">Theme</span></button><div class="dropdown-menu"><button class="dropdown-item" onclick="setTheme('dark')">Cyber Dark</button><button class="dropdown-item" onclick="setTheme('light')">Arctic Light</button><button class="dropdown-item" onclick="setTheme('midnight')">Midnight Violet</button><button class="dropdown-item" onclick="setTheme('matrix')">Matrix Green</button><button class="dropdown-item" onclick="setTheme('ember')">Ember Orange</button></div></div><button class="btn btn-ghost btn-sm w-100" id="btn-logout"><i class="ti ti-logout me-1"></i>Logout</button></div>
         </div>
       </div>
     </aside>
     <div class="page-wrapper">
-      <div class="page-header d-print-none"><div class="container-xl"><div class="page-pretitle">Web-NMS</div><h2 class="page-title" id="page-title">Dashboard</h2></div></div>
+      <div class="page-header d-print-none"><div class="container-xl"><div class="d-flex justify-content-between align-items-center"><div><div class="page-pretitle">Web-NMS</div><h2 class="page-title" id="page-title">Dashboard</h2></div><div class="dropdown"><button class="btn btn-ghost btn-sm dropdown-toggle" data-bs-toggle="dropdown" title="Choose theme"><i class="ti ti-palette me-1"></i><span class="theme-name">Theme</span></button><div class="dropdown-menu dropdown-menu-end"><button class="dropdown-item" onclick="setTheme('dark')">Cyber Dark</button><button class="dropdown-item" onclick="setTheme('light')">Arctic Light</button><button class="dropdown-item" onclick="setTheme('midnight')">Midnight Violet</button><button class="dropdown-item" onclick="setTheme('matrix')">Matrix Green</button><button class="dropdown-item" onclick="setTheme('ember')">Ember Orange</button></div></div></div></div></div>
       <div class="page-body"><div class="container-xl" id="page-content-container"><div id="page-content"></div></div></div>
       <footer class="footer footer-transparent d-print-none"><div class="container-xl"><div class="row text-center align-items-center flex-row-reverse"><div class="col-lg-auto ms-lg-auto"><ul class="list-inline list-inline-dots mb-0"><li class="list-inline-item"><span class="link-secondary">Web-NMS v1.0</span></li></ul></div></div></div></footer>
     </div>
@@ -108,6 +108,6 @@
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape-grid-guide@2.3.3/cytoscape-grid-guide.js"></script>
-  <script src="/js/app.js?v=20260912m"></script>
+  <script src="/js/app.js?v=20260912n"></script>
 </body>
 </html>
