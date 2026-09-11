@@ -9,6 +9,7 @@ let snmpInterval = null;
 let running = false;
 let pingCycleInProgress = false;
 let snmpCycleInProgress = false;
+let lastSnmpFailSig = null;
 
 function setIO(sio) { io = sio; }
 
@@ -57,6 +58,7 @@ async function fullPoll() {
     const results = [];
     const batchSize = 200;
 
+    const failures = [];
     for (let i = 0; i < devices.length; i += batchSize) {
       const batch = devices.slice(i, i + batchSize);
       const batchResults = await Promise.allSettled(batch.map(async (device) => {
@@ -70,6 +72,11 @@ async function fullPoll() {
               if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
             }
           } catch {}
+          const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null);
+          if (!hasData) {
+            const reason = (snmpResult && (snmpResult.error || (snmpResult.errors && snmpResult.errors[0]))) || 'no response';
+            failures.push(`${device.name} (${device.ip_address}): ${reason}`);
+          }
         }
         return { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };
       }));
@@ -77,6 +84,12 @@ async function fullPoll() {
       for (const r of batchResults) if (r.status === 'fulfilled') results.push(r.value);
     }
 
+    const failSig = failures.slice().sort().join('|');
+    if (failSig !== lastSnmpFailSig) {
+      lastSnmpFailSig = failSig;
+      if (failures.length) console.warn(`[Poller] SNMP failed for ${failures.length} device(s): ${failures.slice(0, 5).join('; ')}${failures.length > 5 ? ` (+${failures.length - 5} more)` : ''}`);
+      else console.log('[Poller] SNMP: all devices responding');
+    }
     checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
     return results;

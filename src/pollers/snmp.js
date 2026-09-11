@@ -99,9 +99,11 @@ function extractInterfaces(walks) {
 
 async function pollDevice(device) {
   let session;
-  try { session = createSession(device); } catch { return { error: 'session failed' }; }
+  try { session = createSession(device); } catch (e) { return { error: 'session failed: ' + (e.message || e), errors: ['session: ' + (e.message || e)] }; }
 
-  const result = { deviceId: device.id, ip: device.ip_address, sysDescr: null, sysName: null, cpuLoad: null, memoryPct: null, interfaces: [], timestamp: new Date().toISOString() };
+  const result = { deviceId: device.id, ip: device.ip_address, sysDescr: null, sysName: null, cpuLoad: null, memoryPct: null, interfaces: [], errors: [], timestamp: new Date().toISOString() };
+  const errMsg = (e) => (e && e.message ? e.message : String(e));
+  const cap = async (label, promise) => { try { return await promise; } catch (e) { result.errors.push(label + ': ' + errMsg(e)); return []; } };
 
   try {
     const [d, n] = await Promise.all([snmpGet(session, OIDS.sysDescr).catch(()=>null), snmpGet(session, OIDS.sysName).catch(()=>null)]);
@@ -111,24 +113,21 @@ async function pollDevice(device) {
 
   try {
     // Only columns the UI actually uses (ifType/ifAdminStatus are never displayed)
-    const parts = await Promise.allSettled([
-      snmpWalk(session, OIDS.ifDescr), snmpWalk(session, OIDS.ifSpeed),
-      snmpWalk(session, OIDS.ifOperStatus),
-      snmpWalk(session, OIDS.ifInOctets), snmpWalk(session, OIDS.ifOutOctets),
-      snmpWalk(session, OIDS.ifInErrors), snmpWalk(session, OIDS.ifOutErrors)
-    ]);
+    const colNames = ['ifDescr', 'ifSpeed', 'ifOperStatus', 'ifInOctets', 'ifOutOctets', 'ifInErrors', 'ifOutErrors'];
+    const colOids = [OIDS.ifDescr, OIDS.ifSpeed, OIDS.ifOperStatus, OIDS.ifInOctets, OIDS.ifOutOctets, OIDS.ifInErrors, OIDS.ifOutErrors];
+    const parts = await Promise.all(colOids.map((o, i) => cap(colNames[i], snmpWalk(session, o))));
     const varbinds = [];
-    for (const p of parts) if (p.status === 'fulfilled') varbinds.push(...p.value);
+    for (const p of parts) varbinds.push(...p);
     result.interfaces = extractInterfaces(varbinds);
   } catch {}
 
   try {
-    const loads = await snmpWalk(session, OIDS.hrProcessorLoad).catch(()=>[]);
+    const loads = await cap('hrProcessorLoad', snmpWalk(session, OIDS.hrProcessorLoad));
     if (loads.length > 0) result.cpuLoad = Math.round(loads.reduce((s,c) => s + (Number(c.value)||0), 0) / loads.length);
   } catch {}
 
   try {
-    const stor = await snmpWalk(session, OIDS.hrStorage).catch(()=>[]);
+    const stor = await cap('hrStorage', snmpWalk(session, OIDS.hrStorage));
     const um = {}, sm = {}, dm = {};
     for (const x of stor) {
       const m = x.oid.match(/\.25\.2\.3\.1\.(\d+)\.(\d+)$/);
