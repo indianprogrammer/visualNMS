@@ -49,11 +49,18 @@ async function pingCycles() {
   }
 }
 
+// Consecutive-failure backoff: devices that never answer SNMP (public DNS,
+// dead hosts) are skipped after 5 straight failures and re-probed every
+// 12th cycle, so one cycle stops taking ~50s of pure timeouts.
+let snmpFailCount = {};
+let snmpCycleCount = 0;
+
 async function fullPoll() {
   if (snmpCycleInProgress) return [];
   snmpCycleInProgress = true;
   const t0 = Date.now();
   try {
+    snmpCycleCount++;
     const devices = db.prepare('SELECT * FROM devices').all();
     const results = [];
     const batchSize = 200;
@@ -64,19 +71,29 @@ async function fullPoll() {
       const batchResults = await Promise.allSettled(batch.map(async (device) => {
         let snmpResult = null;
         if (device.snmp_community || device.snmp_version === '3') {
-          try {
-            snmpResult = await snmpPoller.pollDevice(device);
-            if (snmpResult && !snmpResult.error) {
-              if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
-              if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
-              if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
-              if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
-            }
-          } catch {}
-          const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
-          if (!hasData) {
+          const fails = snmpFailCount[device.id] || 0;
+          if (fails >= 5 && (snmpCycleCount % 12 !== 0)) {
+            snmpResult = { skipped: true, deviceId: device.id, ip: device.ip_address, timestamp: new Date().toISOString() };
+          } else {
+            try {
+              snmpResult = await snmpPoller.pollDevice(device);
+              if (snmpResult && !snmpResult.error) {
+                if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+                if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
+                if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
+                if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+              }
+            } catch {}
+          }
+          const hasData = snmpResult && !snmpResult.error && !snmpResult.skipped && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
+          if (snmpResult && snmpResult.skipped) {
+            // neutral: keep prior failure count, stay silent
+          } else if (!hasData) {
+            snmpFailCount[device.id] = fails + 1;
             const reason = (snmpResult && (snmpResult.error || (snmpResult.errors && snmpResult.errors[0]))) || 'no response';
             failures.push(`${device.name} (${device.ip_address}): ${reason}`);
+          } else {
+            snmpFailCount[device.id] = 0;
           }
         }
         return { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };

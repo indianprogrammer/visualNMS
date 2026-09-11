@@ -53,7 +53,7 @@ function snmpGet(session, oid) {
   });
 }
 
-function snmpWalk(session, oid, maxRep = 50) {
+function snmpWalk(session, oid, maxRep = 100) {
   return new Promise((resolve, reject) => {
     const results = [];
     // NOTE: net-snmp feedCb receives ONLY the varbinds array (no err arg);
@@ -141,6 +141,15 @@ async function pollDevice(device) {
     result.sysDescr = d?.toString() || null;
     result.sysName = n?.toString() || null;
   } catch {}
+
+  // Fast-fail probe: a host answering neither sysDescr nor sysName will answer
+  // nothing else either. Skip the 9 table walks (~9× timeout) for dead hosts.
+  if (!result.sysDescr && !result.sysName) {
+    try { session.close(); } catch {}
+    result.error = 'no response';
+    result.errors.push('system: no response');
+    return result;
+  }
 
   try {
     // Only columns the UI actually uses (ifType/ifAdminStatus are never displayed)
