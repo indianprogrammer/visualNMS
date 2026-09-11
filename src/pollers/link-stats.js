@@ -174,7 +174,7 @@ function recordInterfaceRates(deviceId, interfaces, boundSet) {
   try { ins = db.prepare(`INSERT INTO link_rate_history (device_id, interface_name, rx_bps, tx_bps) VALUES (?,?,?,?)`); } catch { return out; }
   for (const i of interfaces || []) {
     try {
-      if (!i || !i.if_name || i.if_in_octets == null || i.if_out_octets == null) continue;
+      if (!i || !i.if_name || String(i.if_name).trim() === '' || i.if_in_octets == null || i.if_out_octets == null) continue;
       const rx = Number(i.if_in_octets) || 0;
       const tx = Number(i.if_out_octets) || 0;
       const key = deviceId + '|' + i.if_name;

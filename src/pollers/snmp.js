@@ -94,7 +94,8 @@ function extractInterfaces(walks) {
     else if (o.endsWith('.14.' + idx)) ifaces[idx].if_in_errors = Number(w.value) || 0;
     else if (o.endsWith('.20.' + idx)) ifaces[idx].if_out_errors = Number(w.value) || 0;
   }
-  return Object.values(ifaces);
+  // Nameless interfaces are never polled further nor shown anywhere.
+  return Object.values(ifaces).filter((i) => i.if_name && String(i.if_name).trim() !== '');
 }
 
 // hrStorageFixedDisk type OID suffix; values may arrive as dotted OID strings.
@@ -176,6 +177,8 @@ function saveInterfaces(deviceId, interfaces) {
       // Never store a row we can't show status for — a missing oper status
       // (timed-out walk) must not overwrite good data with 0 (= Down).
       if (i.if_oper_status === undefined) continue;
+      // Nameless interfaces are not stored at all.
+      if (!i.if_name || String(i.if_name).trim() === '') continue;
       ensure.run(deviceId, i.if_index);
       const sets = [], vals = [];
       for (const c of cols) if (i[c] !== undefined) { sets.push(c + '=?'); vals.push(i[c]); }

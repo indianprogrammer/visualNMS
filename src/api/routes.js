@@ -85,7 +85,7 @@ router.get('/devices/:id/metrics', requireAuth, (req, res) => {
 });
 
 router.get('/devices/:id/interfaces', requireAuth, (req, res) => {
-  res.json(db.prepare('SELECT * FROM interfaces WHERE device_id=? ORDER BY if_index').all(req.params.id));
+  res.json(db.prepare(`SELECT * FROM interfaces WHERE device_id=? AND if_name IS NOT NULL AND TRIM(if_name) != '' ORDER BY if_index`).all(req.params.id));
 });
 
 router.get('/devices/:id/ping', requireAuth, async (req, res) => {
