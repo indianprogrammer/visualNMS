@@ -55,7 +55,9 @@ if(!window._topoDelBound){window._topoDelBound=true;document.addEventListener('k
 });}
 function iconCls(t) { return {router:'ti ti-router',switch:'ti ti-network',server:'ti ti-server',wireless_ap:'ti ti-antenna',firewall:'ti ti-shield',printer:'ti ti-printer',ont:'ti ti-cable'}[t]||'ti ti-device-desktop'; }
 function sColor(s) { return {up:'#2fb344',down:'#e53e3e',warning:'#f59f00',unknown:'#868a91'}[s]||'#868a91'; }
-// ── Theme (futuristic dark/light) ──
+// ── Theme (futuristic gallery: dark/light/midnight/matrix/ember) ──
+var THEMES=[{id:'dark',name:'Cyber Dark',bs:'dark'},{id:'light',name:'Arctic Light',bs:'light'},{id:'midnight',name:'Midnight Violet',bs:'dark'},{id:'matrix',name:'Matrix Green',bs:'dark'},{id:'ember',name:'Ember Orange',bs:'dark'}];
+function themeDef(id){for(var i=0;i<THEMES.length;i++)if(THEMES[i].id===id)return THEMES[i];return THEMES[0];}
 function themeName(){return document.documentElement.getAttribute('data-theme')||'dark';}
 function thGrid(){return themeName()==='light'?'#d7e0ea':'#1b2942';}
 function thTick(){return themeName()==='light'?'#5b6b7c':'#7d8db0';}
@@ -65,9 +67,10 @@ function thEdgeLabelBg(){return themeName()==='light'?'#ffffff':'#0a1120';}
 function thNetworkBg(){return themeName()==='light'?'#dbe7f5':'#152238';}
 function thSubmapBg(){return themeName()==='light'?'#e3e9f7':'#1d2440';}
 function thStaticBg(){return themeName()==='light'?'#64748b':'#3a4152';}
-function syncThemeBtn(){var b=document.getElementById('btn-theme');if(b)b.innerHTML='<i class="ti '+(themeName()==='light'?'ti-moon':'ti-sun')+' me-1"></i><span>Theme</span>';}
-function initTheme(){try{if(!localStorage.getItem('webnms_theme'))localStorage.setItem('webnms_theme','dark');}catch(e){}syncThemeBtn();}
-function toggleTheme(){var t=themeName()==='light'?'dark':'light';try{localStorage.setItem('webnms_theme',t);}catch(e){}document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);syncThemeBtn();if(currentPage)refreshForTheme();}
+function syncThemeBtn(){var b=document.getElementById('theme-name');if(b)b.textContent=themeDef(themeName()).name;}
+function initTheme(){var t='dark';try{t=localStorage.getItem('webnms_theme')||'dark';}catch(e){}setTheme(t,true);}
+function setTheme(id,silent){var d=themeDef(id);try{localStorage.setItem('webnms_theme',d.id);}catch(e){}document.documentElement.setAttribute('data-theme',d.id);document.documentElement.setAttribute('data-bs-theme',d.bs);syncThemeBtn();if(!silent&&currentPage)refreshForTheme();}
+function toggleTheme(){setTheme(themeName()==='light'?'dark':'light');}
 function refreshForTheme(){try{if(currentPage==='topology'&&selectedMapId){loadMap(selectedMapId);}else{navigateTo(currentPage);}}catch(e){}}
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
 function fmtS(b) { if(b==null) return '-'; if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return Math.round(b)+' bps'; }
