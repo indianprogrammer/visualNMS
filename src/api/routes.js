@@ -383,6 +383,65 @@ router.get('/tools/portscan/:target', requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+const _targetOk = (t) => /^[a-zA-Z0-9._-]+$/.test(t || '');
+
+// DNS lookup: A/AAAA/NS/MX/TXT for names, PTR for IPs.
+router.get('/tools/dns/:target', requireAuth, async (req, res) => {
+  const target = req.params.target;
+  if (!_targetOk(target)) return res.status(400).json({ error: 'Invalid target' });
+  const dns = require('dns/promises');
+  const net = require('net');
+  const out = { target, records: {} };
+  const tryGet = async (k, fn) => { try { const v = await fn(); if (v && v.length) out.records[k] = v; } catch {} };
+  try {
+    if (net.isIP(target)) {
+      await tryGet('PTR', () => dns.reverse(target));
+    } else {
+      await tryGet('A', () => dns.resolve4(target));
+      await tryGet('AAAA', () => dns.resolve6(target));
+      await tryGet('NS', () => dns.resolveNs(target));
+      await tryGet('MX', () => dns.resolveMx(target).then((m) => m.map((x) => `${x.priority} ${x.exchange}`)));
+      await tryGet('TXT', () => dns.resolveTxt(target).then((t) => t.map((x) => x.join(''))));
+    }
+  } catch (e) { out.error = String(e.message || e).slice(0, 200); }
+  res.json(out);
+});
+
+// HTTP check: status, time, size for a URL (http/https only, 10s cap).
+router.get('/tools/http', requireAuth, async (req, res) => {
+  let u;
+  try { u = new URL(String(req.query.url || '')); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return res.status(400).json({ error: 'Only http/https URLs' });
+  const t0 = Date.now();
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 10000);
+    const r = await fetch(u.toString(), { signal: ctl.signal, redirect: 'follow' });
+    const buf = Buffer.from(await r.arrayBuffer());
+    clearTimeout(to);
+    res.json({ url: u.toString(), ok: r.ok, status: r.status, statusText: r.statusText, ms: Date.now() - t0, bytes: buf.length, contentType: r.headers.get('content-type') });
+  } catch (e) { res.json({ url: u.toString(), ok: false, ms: Date.now() - t0, error: String(e.message || e).slice(0, 200) }); }
+});
+
+// SNMP walk against an arbitrary target (ad-hoc community/version, read-only).
+router.get('/tools/snmpwalk', requireAuth, async (req, res) => {
+  const target = req.query.target;
+  if (!_targetOk(target)) return res.status(400).json({ error: 'Invalid target' });
+  const version = String(req.query.version || '2c');
+  if (!['1', '2c'].includes(version)) return res.status(400).json({ error: 'Only v1/v2c supported here' });
+  const port = Math.min(Math.max(parseInt(req.query.port) || 161, 1), 65535);
+  try {
+    const r = await snmpPoller.pollDevice({ ip_address: target, snmp_community: req.query.community || 'public', snmp_version: version, snmp_port: port });
+    if (!r || r.error) return res.json({ target, error: (r && (r.error || (r.errors && r.errors[0]))) || 'no response' });
+    res.json({
+      target, sysDescr: r.sysDescr, sysName: r.sysName,
+      cpuLoad: r.cpuLoad, memoryPct: r.memoryPct, diskPct: r.diskPct,
+      sysUpTime: r.sysUpTime, interfaceCount: (r.interfaces || []).length,
+      interfaces: (r.interfaces || []).slice(0, 100).map((i) => ({ if_index: i.if_index, if_name: i.if_name, if_speed: i.if_speed, if_oper_status: i.if_oper_status, if_admin_status: i.if_admin_status }))
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Discovery ──
 router.post('/discovery/scan', requireAuth, async (req, res) => {
   const subnet = req.body.subnet;

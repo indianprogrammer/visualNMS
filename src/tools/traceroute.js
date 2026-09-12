@@ -66,4 +66,4 @@ async function mtr(target, cycles = 4) {
   return { target, hops: parseMtrReport(stdout), completed: true };
 }
 
-module.exports = { traceroute, portScan, mtr };
+module.exports = { traceroute, portScan, mtr, parseMtrReport };

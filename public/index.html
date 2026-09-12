@@ -50,10 +50,10 @@
     <div class="modal-body">
       <input type="hidden" id="df-id">
       <div class="row mb-3"><div class="col-md-6"><label class="form-label">Name</label><input type="text" class="form-control" id="df-name"></div><div class="col-md-6"><label class="form-label">IP Address</label><input type="text" class="form-control" id="df-ip"></div></div>
-      <div class="row mb-3"><div class="col-md-8"><label class="form-label">SNMP Profile</label><select class="form-select" id="df-profile"><option value="">— Manual —</option></select></div><div class="col-md-4"><label class="form-label">SNMP Port</label><input type="number" class="form-control" id="df-port" value="161"></div></div>
-      <div class="row mb-3"><div class="col-md-4"><label class="form-label">Type</label><select class="form-select" id="df-type"><option value="generic">Generic</option><option value="router">Router</option><option value="switch">Switch</option><option value="server">Server</option><option value="wireless_ap">Wireless AP</option><option value="firewall">Firewall</option><option value="printer">Printer</option><option value="ont">ONT</option></select></div>
+      <div class="row mb-3"><div class="col-md-4"><label class="form-label">Type</label><select class="form-select" id="df-type"><option value="generic">Generic</option><option value="router">Router</option><option value="switch">Switch</option><option value="server">Server</option><option value="wireless_ap">Wireless AP</option><option value="firewall">Firewall</option><option value="printer">Printer</option><option value="ont">ONT</option></select></div><div class="col-md-8"><label class="form-label">SNMP Profile</label><select class="form-select" id="df-profile"><option value="">— Manual —</option></select></div></div>
+      <div id="df-manual-rows"><div class="row mb-3"><div class="col-md-4"><label class="form-label">SNMP Port</label><input type="number" class="form-control" id="df-port" value="161"></div>
       <div class="col-md-4"><label class="form-label">SNMP Version</label><select class="form-select" id="df-ver"><option value="2c">v2c</option><option value="1">v1</option><option value="3">v3</option></select></div>
-      <div class="col-md-4"><label class="form-label">SNMP Community</label><input type="text" class="form-control" id="df-comm" value="public"></div></div>
+      <div class="col-md-4"><label class="form-label">SNMP Community</label><input type="text" class="form-control" id="df-comm" value="public"></div></div></div>
       <div id="df-v3-rows" style="display:none">
         <div class="row mb-3"><div class="col-md-4"><label class="form-label">SNMP User</label><input type="text" class="form-control" id="df-user" autocomplete="off"></div><div class="col-md-4"><label class="form-label">Auth Protocol</label><select class="form-select" id="df-authp"><option value="none">None</option><option value="md5">MD5</option><option value="sha">SHA</option></select></div><div class="col-md-4"><label class="form-label">Auth Password</label><input type="password" class="form-control" id="df-authpw" autocomplete="off"></div></div>
         <div class="row mb-3"><div class="col-md-6"><label class="form-label">Privacy Protocol</label><select class="form-select" id="df-privp"><option value="none">None</option><option value="des">DES</option><option value="aes">AES</option></select></div><div class="col-md-6"><label class="form-label">Privacy Password</label><input type="password" class="form-control" id="df-privpw" autocomplete="off"></div></div>
@@ -108,6 +108,6 @@
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape-grid-guide@2.3.3/cytoscape-grid-guide.js"></script>
-  <script src="/js/app.js?v=20260913j"></script>
+  <script src="/js/app.js?v=20260913n"></script>
 </body>
 </html>

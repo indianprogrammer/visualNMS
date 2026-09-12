@@ -3,6 +3,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 
 async function pingHost(ip, timeoutMs = 3000) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(ip || '')) return { reachable: false, latencyMs: -1, packetLoss: 100, error: 'Invalid target' };
   try {
     const { stdout } = await execAsync(`ping -c 1 -W 1 -w 1 ${ip}`, { timeout: 3000 });
     const avgMatch = stdout.match(/min\/avg\/max.*?=? ([\d.]+)/);

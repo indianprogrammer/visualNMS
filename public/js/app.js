@@ -239,7 +239,7 @@ function openDevModal(dev){
   document.getElementById('df-authpw').value=dev?(dev.snmp_auth_pass||''):'';
   document.getElementById('df-privp').value=dev?(dev.snmp_priv_protocol||'none'):'none';
   document.getElementById('df-privpw').value=dev?(dev.snmp_priv_pass||''):'';
-  dfVerToggle();
+  dfProfileToggle();
   api('/snmp-profiles').then(function(list){_snmpProfiles=list||[];var s=document.getElementById('df-profile');if(s){s.innerHTML='<option value="">— Manual —</option>'+_snmpProfiles.map(function(p){return '<option value="'+p.id+'">'+esc(p.name)+' (v'+p.snmp_version+')</option>';}).join('');s.value='';}}).catch(function(){});
   m.show();
 }
@@ -289,9 +289,11 @@ function viewDevice(id) {
   }).catch(function(e){console.error(e);toast('Error loading device','critical');});
 }
 function pingDev(id){toast('Pinging...','info');api('/devices/'+id+'/ping').then(function(r){toast('Ping: '+(r.reachable?'Reachable':'Down')+' '+r.latencyMs+'ms',r.reachable?'success':'critical');});}
-function dfVerToggle(){var v=document.getElementById('df-ver').value;document.getElementById('df-v3-rows').style.display=v==='3'?'':'none';}
+function dfVerToggle(){var manual=!document.getElementById('df-profile').value;var v=document.getElementById('df-ver').value;document.getElementById('df-v3-rows').style.display=(manual&&v==='3')?'':'none';}
+function dfProfileToggle(){var manual=!document.getElementById('df-profile').value;document.getElementById('df-manual-rows').style.display=manual?'':'none';dfVerToggle();}
 document.getElementById('df-ver').onchange=dfVerToggle;
 document.getElementById('df-profile').onchange=function(){
+  dfProfileToggle();
   var pid=this.value;if(!pid)return;
   var p=_snmpProfiles.filter(function(x){return String(x.id)===String(pid);})[0];if(!p)return;
   document.getElementById('df-ver').value=p.snmp_version;
@@ -302,7 +304,6 @@ document.getElementById('df-profile').onchange=function(){
   document.getElementById('df-authpw').value=p.snmp_auth_pass||'';
   document.getElementById('df-privp').value=p.snmp_priv_protocol||'none';
   document.getElementById('df-privpw').value=p.snmp_priv_pass||'';
-  dfVerToggle();
   toast('Profile "'+p.name+'" applied','success');
 };
 document.getElementById('btn-save-dev').onclick=function(){
@@ -1226,15 +1227,43 @@ function loadDiscovery(){
 function startScan(){var s=document.getElementById('scan-cidr').value;if(!s)return;api('/discovery/scan',{method:'POST',body:{subnet:s}}).then(function(){toast('Scan started','success');}).catch(function(){toast('Scan failed','critical');});}
 
 // ═══ TOOLS ═══
+var _mtrOn=false,_mtrTarget=null,_mtrStart=0;
+function mtrStop(){_mtrOn=false;try{if(socket&&socket.connected)socket.emit('tool:mtr-stop');}catch(e){}}
+function mtrOnData(d){
+  if(!_mtrOn||!d)return;
+  if(d.target!==_mtrTarget)return;
+  var body=document.getElementById('mtr-body');if(!body){_mtrOn=false;return;}
+  if(d.error&&!(d.hops&&d.hops.length)){body.innerHTML='<tr><td colspan="8" class="text-danger">'+esc(d.error)+'</td></tr>';return;}
+  if(d.stopped){var st=document.getElementById('mtr-status');if(st)st.textContent='Stopped (10 min limit).';_mtrOn=false;return;}
+  var el=Math.round((Date.now()-_mtrStart)/1000);
+  var st2=document.getElementById('mtr-status');if(st2)st2.textContent='Live — cycle '+d.cycles+', '+el+'s elapsed';
+  body.innerHTML=(d.hops||[]).map(function(h){
+    var lossCls=h.loss>20?'text-danger':(h.loss>0?'text-warning':'');
+    var f=function(v){return v==null?'—':v;};
+    return '<tr><td>'+h.hop+'</td><td>'+esc(h.host||'*')+'</td><td class="'+lossCls+'">'+h.loss+'</td><td>'+h.sent+'</td><td>'+f(h.last)+'</td><td>'+f(h.avg)+'</td><td>'+f(h.best)+'</td><td>'+f(h.worst)+'</td></tr>';
+  }).join('')||'<tr><td colspan="8" class="text-muted">Probing…</td></tr>';
+}
 function loadTools(){
-  pHTML('<div class="card mb-3"><div class="card-body"><div class="d-flex gap-2"><select class="form-select" id="tool-type" style="width:180px"><option value="ping">Ping</option><option value="traceroute">Traceroute</option><option value="portscan">Port Scan</option></select><input type="text" class="form-control" id="tool-target" placeholder="Target IP" style="width:300px"><button class="btn btn-primary" onclick="runTool()"><i class="ti ti-player-play"></i> Run</button></div></div></div><div class="card"><div class="card-header"><h3 class="card-title" id="tool-title">Result</h3></div><div class="card-body" id="tool-res"></div></div>');
+  pHTML('<div class="card mb-3"><div class="card-body"><div class="d-flex gap-2 flex-wrap"><select class="form-select" id="tool-type" style="width:180px"><option value="ping">Ping</option><option value="traceroute">Traceroute</option><option value="mtr">MTR</option><option value="portscan">Port Scan</option><option value="dns">DNS Lookup</option><option value="http">HTTP Check</option><option value="snmpwalk">SNMP Walk</option></select><input type="text" class="form-control" id="tool-target" placeholder="Target IP or hostname" style="width:300px"><span id="tool-extra" class="d-flex gap-2"></span><button class="btn btn-primary" onclick="runTool()"><i class="ti ti-player-play"></i> Run</button></div></div></div><div class="card"><div class="card-header"><h3 class="card-title" id="tool-title">Result</h3></div><div class="card-body" id="tool-res"></div></div>');
   document.getElementById('tool-target').onkeypress=function(e){if(e.key==='Enter')runTool();};
+  document.getElementById('tool-type').onchange=function(){mtrStop();toolExtraInputs();};
+  toolExtraInputs();
+}
+function toolExtraInputs(){
+  var type=document.getElementById('tool-type').value;
+  var ex=document.getElementById('tool-extra');if(!ex)return;
+  var tgt=document.getElementById('tool-target');
+  if(tgt)tgt.placeholder=type==='http'?'https://example.com/path':(type==='dns'?'Hostname or IP':'Target IP or hostname');
+  if(type==='portscan')ex.innerHTML='<input type="text" class="form-control" id="tool-ports" placeholder="Ports (e.g. 22,80,443)" style="width:220px">';
+  else if(type==='snmpwalk')ex.innerHTML='<input type="text" class="form-control" id="tool-comm" placeholder="Community" value="public" style="width:140px"><select class="form-select" id="tool-ver" style="width:100px"><option value="2c">v2c</option><option value="1">v1</option></select>';
+  else ex.innerHTML='';
 }
 function navTool(ip,type){navigateTo('tools');setTimeout(function(){document.getElementById('tool-target').value=ip;document.getElementById('tool-type').value=type;runTool();},200);}
 function runTool(){
   var type=document.getElementById('tool-type').value;
   var target=document.getElementById('tool-target').value;
   if(!target)return;
+  mtrStop();
   var res=document.getElementById('tool-res');
   res.innerHTML='<div class="text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Running...</div>';
   if(type==='ping'){
@@ -1251,9 +1280,54 @@ function runTool(){
       res.innerHTML=r.hops.map(function(h){return '<div class="traceroute-hop"><span class="hop-num">'+h.hop+'</span><span class="hop-ip">'+h.ip+'</span><div class="hop-bar"><div class="hop-bar-fill" style="width:'+(h.avgMs?(h.avgMs/mx*100):0)+'%"></div></div><span class="text-muted small">'+(h.avgMs?h.avgMs.toFixed(1)+'ms':'*')+'</span></div>';}).join('');
     });
   } else if(type==='portscan'){
-    api('/tools/portscan/'+target).then(function(r){
+    var pEl=document.getElementById('tool-ports');
+    var url='/tools/portscan/'+target+(pEl&&pEl.value.trim()?('?ports='+encodeURIComponent(pEl.value.replace(/\s+/g,''))):'');
+    api(url).then(function(r){
       document.getElementById('tool-title').textContent='Port Scan: '+target;
       res.innerHTML='<table class="table table-vcenter"><thead><tr><th>Port</th><th>State</th></tr></thead><tbody>'+r.ports.map(function(p){return '<tr><td>'+p.port+'</td><td class="'+(p.state==='open'?'port-open':p.state==='closed'?'port-closed':'port-filtered')+'">'+p.state+'</td></tr>';}).join('')+'</tbody></table>';
+    });
+  } else if(type==='mtr'){
+    mtrStop();
+    document.getElementById('tool-title').textContent='MTR: '+target;
+    res.innerHTML='<div class="d-flex align-items-center gap-2 mb-2"><button class="btn btn-sm btn-danger" id="mtr-stop">Stop</button><span class="small text-muted" id="mtr-status">Starting…</span></div>'
+      +'<table class="table table-vcenter font-monospace"><thead><tr><th>#</th><th>Host</th><th>Loss%</th><th>Sent</th><th>Last</th><th>Avg</th><th>Best</th><th>Worst</th></tr></thead><tbody id="mtr-body"><tr><td colspan="8" class="text-muted">Probing…</td></tr></tbody></table>';
+    document.getElementById('mtr-stop').onclick=function(){mtrStop();var st=document.getElementById('mtr-status');if(st)st.textContent='Stopped.';};
+    _mtrOn=true;_mtrTarget=target;_mtrStart=Date.now();
+    if(socket&&socket.connected){socket.off('tool:mtr-data');socket.on('tool:mtr-data',mtrOnData);socket.emit('tool:mtr-start',{target:target});}
+    else{res.innerHTML='<div class="text-danger">Socket not connected.</div>';_mtrOn=false;}
+  } else if(type==='dns'){
+    api('/tools/dns/'+target).then(function(r){
+      document.getElementById('tool-title').textContent='DNS: '+target;
+      var keys=Object.keys(r.records||{});
+      if(!keys.length){res.innerHTML='<div class="text-muted">No records'+(r.error?' — '+esc(r.error):'')+'</div>';return;}
+      res.innerHTML=keys.map(function(k){
+        return '<div class="mb-2"><div class="fw-bold">'+esc(k)+'</div>'+r.records[k].map(function(v){return '<div><code>'+esc(String(v))+'</code></div>';}).join('')+'</div>';
+      }).join('');
+    });
+  } else if(type==='http'){
+    api('/tools/http?url='+encodeURIComponent(target)).then(function(r){
+      document.getElementById('tool-title').textContent='HTTP: '+target;
+      if(r.error&&!r.status){res.innerHTML='<div class="text-danger">'+esc(r.error)+'</div>';return;}
+      res.innerHTML='<table class="table table-vcenter"><tbody>'
+        +'<tr><td>Status</td><td><b>'+r.status+' '+esc(r.statusText||'')+'</b></td></tr>'
+        +'<tr><td>Time</td><td>'+r.ms+' ms</td></tr>'
+        +'<tr><td>Size</td><td>'+esc(fmtB(r.bytes||0))+'</td></tr>'
+        +'<tr><td>Content-Type</td><td><code>'+esc(r.contentType||'-')+'</code></td></tr>'
+        +'</tbody></table>';
+    });
+  } else if(type==='snmpwalk'){
+    var cEl=document.getElementById('tool-comm'),vEl=document.getElementById('tool-ver');
+    api('/tools/snmpwalk?target='+encodeURIComponent(target)+'&community='+encodeURIComponent(cEl&&cEl.value?cEl.value:'public')+'&version='+encodeURIComponent(vEl&&vEl.value?vEl.value:'2c')).then(function(r){
+      document.getElementById('tool-title').textContent='SNMP: '+target;
+      if(r.error){res.innerHTML='<div class="text-danger">'+esc(r.error)+'</div>';return;}
+      var h='<table class="table table-vcenter"><tbody>'
+        +'<tr><td>sysName</td><td><code>'+esc(r.sysName||'-')+'</code></td></tr>'
+        +'<tr><td>sysDescr</td><td class="small">'+esc((r.sysDescr||'-').slice(0,300))+'</td></tr>'
+        +'<tr><td>CPU / Memory / Disk</td><td>'+(r.cpuLoad!=null?r.cpuLoad+'%':'-')+' / '+(r.memoryPct!=null?r.memoryPct+'%':'-')+' / '+(r.diskPct!=null?r.diskPct+'%':'-')+'</td></tr>'
+        +'<tr><td>Interfaces</td><td>'+r.interfaceCount+'</td></tr></tbody></table>';
+      if(r.interfaces&&r.interfaces.length)h+='<table class="table table-vcenter"><thead><tr><th>#</th><th>Name</th><th>Speed</th><th>Oper</th><th>Admin</th></tr></thead><tbody>'
+        +r.interfaces.map(function(i){return '<tr><td>'+i.if_index+'</td><td><code>'+esc(i.if_name||'')+'</code></td><td>'+esc(fmtS(i.if_speed||0))+'</td><td>'+(i.if_oper_status===1?'up':i.if_oper_status===2?'down':'?')+'</td><td>'+(i.if_admin_status===1?'up':i.if_admin_status===2?'down':'?')+'</td></tr>';}).join('')+'</tbody></table>';
+      res.innerHTML=h;
     });
   }
 }
