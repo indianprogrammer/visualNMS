@@ -206,6 +206,21 @@ CREATE INDEX IF NOT EXISTS idx_lrh_dev_if_time ON link_rate_history(device_id, i
 CREATE INDEX IF NOT EXISTS idx_lrh_time ON link_rate_history(timestamp);
 `);
 
+// SFP/DOM optical columns on interfaces (migrates existing DBs).
+// Stores per-interface transceiver diagnostics polled via ENTITY-SENSOR-MIB /
+// CISCO-ENTITY-SENSOR-MIB. NULL = copper/non-SFP or not yet polled.
+try {
+  const cols = db.prepare(`PRAGMA table_info(interfaces)`).all().map((c) => c.name);
+  const addCol = (name, def) => {
+    if (!cols.includes(name)) db.exec(`ALTER TABLE interfaces ADD COLUMN ${name} ${def}`);
+  };
+  addCol('sfp_rx_dbm', 'REAL');
+  addCol('sfp_tx_dbm', 'REAL');
+  addCol('sfp_temp_c', 'REAL');
+  addCol('sfp_voltage_v', 'REAL');
+  addCol('sfp_bias_ma', 'REAL');
+} catch {}
+
 db.getSetting = function (key, fallback) {
   try {
     const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);

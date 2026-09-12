@@ -18,9 +18,9 @@ function fullNode(mapId, nodeId) {
   const n = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=? AND mn.id=?`).get(mapId, nodeId);
   if (n && n.device_id) {
     try {
-      const lm = db.prepare(`SELECT metric_type, value FROM last_metrics WHERE device_id=? AND metric_type IN ('cpu','memory','disk')`).all(n.device_id);
-      n.cpu = null; n.memory = null; n.disk = null;
-      lm.forEach((r) => { if (r.metric_type === 'cpu') n.cpu = r.value; else if (r.metric_type === 'memory') n.memory = r.value; else if (r.metric_type === 'disk') n.disk = r.value; });
+      const lm = db.prepare(`SELECT metric_type, value FROM last_metrics WHERE device_id=? AND metric_type IN ('cpu','memory','disk','uptime')`).all(n.device_id);
+      n.cpu = null; n.memory = null; n.disk = null; n.uptime = null;
+      lm.forEach((r) => { if (r.metric_type === 'cpu') n.cpu = r.value; else if (r.metric_type === 'memory') n.memory = r.value; else if (r.metric_type === 'disk') n.disk = r.value; else if (r.metric_type === 'uptime') n.uptime = r.value; });
     } catch {}
   }
   return n;
@@ -144,7 +144,7 @@ router.get('/maps/:id', requireAuth, (req, res) => {
   if (!m) return res.status(404).json({ error: 'Not found' });
   m.nodes = db.prepare(`SELECT mn.*,d.name as device_name,d.status as device_status,d.ip_address,d.device_type,d.mac_address as mac_address,d.last_seen as last_seen FROM map_nodes mn LEFT JOIN devices d ON mn.device_id=d.id WHERE mn.map_id=?`).all(req.params.id);
   try {
-    const lm = db.prepare(`SELECT device_id, metric_type, value FROM last_metrics WHERE metric_type IN ('cpu','memory','disk')`).all();
+    const lm = db.prepare(`SELECT device_id, metric_type, value FROM last_metrics WHERE metric_type IN ('cpu','memory','disk','uptime')`).all();
     const lmByDev = {};
     lm.forEach((r) => { (lmByDev[r.device_id] = lmByDev[r.device_id] || {})[r.metric_type] = r.value; });
     m.nodes.forEach((n) => {
@@ -152,6 +152,7 @@ router.get('/maps/:id', requireAuth, (req, res) => {
       n.cpu = s && s.cpu != null ? s.cpu : null;
       n.memory = s && s.memory != null ? s.memory : null;
       n.disk = s && s.disk != null ? s.disk : null;
+      n.uptime = s && s.uptime != null ? s.uptime : null;
     });
   } catch {}
   const rawLinks = db.prepare('SELECT * FROM map_links WHERE map_id=?').all(req.params.id);
@@ -222,6 +223,31 @@ router.delete('/maps/:mapId/links/:linkId', requireAuth, (req, res) => {
   db.prepare('DELETE FROM map_links WHERE id=? AND map_id=?').run(req.params.linkId, req.params.mapId);
   res.json({ message: 'Deleted' });
   emitMap(req.params.mapId, { type: 'link-deleted', id: parseInt(req.params.linkId) });
+});
+
+router.put('/maps/:mapId/links/:linkId', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const cur = db.prepare('SELECT * FROM map_links WHERE id=? AND map_id=?').get(req.params.linkId, req.params.mapId);
+  if (!cur) return res.status(404).json({ error: 'Link not found' });
+  const sets = [], p = [];
+  if (b.source_interface !== undefined) { sets.push('source_interface=?'); p.push(b.source_interface || null); }
+  if (b.target_interface !== undefined) { sets.push('target_interface=?'); p.push(b.target_interface || null); }
+  if (b.max_speed_bps !== undefined) {
+    if (b.max_speed_bps === null || b.max_speed_bps === 'auto') { sets.push('max_speed_bps=?'); p.push(null); }
+    else { sets.push('max_speed_bps=?'); p.push(parseInt(b.max_speed_bps) > 0 ? parseInt(b.max_speed_bps) : 1000000000); }
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  p.push(req.params.linkId, req.params.mapId);
+  db.prepare(`UPDATE map_links SET ${sets.join(',')} WHERE id=? AND map_id=?`).run(...p);
+  res.json({ message: 'Updated' });
+  try {
+    const linkStats = require('../pollers/link-stats');
+    const raw = db.prepare('SELECT * FROM map_links WHERE id=?').get(req.params.linkId);
+    const nodes = db.prepare('SELECT id, device_id FROM map_nodes WHERE map_id=?').all(req.params.mapId);
+    const nodeById = {};
+    nodes.forEach((n) => { nodeById[n.id] = n; });
+    emitMap(req.params.mapId, { type: 'link-updated', link: linkStats.enrichLink(raw, nodeById) });
+  } catch { emitMap(req.params.mapId, { type: 'link-updated', link: db.prepare('SELECT * FROM map_links WHERE id=?').get(req.params.linkId) }); }
 });
 
 // ── Alerts ──
@@ -298,16 +324,16 @@ router.get('/settings', requireAuth, (req, res) => {
 });
 
 router.put('/settings', requireAuth, (req, res) => {
-  const parseMs = (v) => { const n = parseInt(v); return (isNaN(n) || n < 2000 || n > 3600000) ? null : n; };
+  const parseMs = (v) => { const n = parseInt(v); return (isNaN(n) || n < 1000 || n > 3600000) ? null : n; };
   const b = req.body || {};
   if (b.snmp_interval_ms !== undefined) {
     const v = parseMs(b.snmp_interval_ms);
-    if (v === null) return res.status(400).json({ error: 'snmp_interval_ms must be 2000-3600000' });
+    if (v === null) return res.status(400).json({ error: 'snmp_interval_ms must be 1000-3600000' });
     db.setSetting('snmp_interval_ms', v);
   }
   if (b.ping_interval_ms !== undefined) {
     const v = parseMs(b.ping_interval_ms);
-    if (v === null) return res.status(400).json({ error: 'ping_interval_ms must be 2000-3600000' });
+    if (v === null) return res.status(400).json({ error: 'ping_interval_ms must be 1000-3600000' });
     db.setSetting('ping_interval_ms', v);
   }
   const pollerEngine = require('../pollers/poller-engine');
@@ -376,6 +402,12 @@ router.post('/trigger-poll', requireAuth, async (req, res) => {
   const pollerEngine = require('../pollers/poller-engine');
   const results = await pollerEngine.fullPoll();
   res.json({ message: 'Poll completed', devices: results.length });
+});
+
+// ── Poller health: cycle runs/skips prove the overlap guards aren't starving a loop ──
+router.get('/poller/stats', requireAuth, (req, res) => {
+  const pollerEngine = require('../pollers/poller-engine');
+  res.json({ cycles: pollerEngine.getCycleStats(), snmp_interval_ms: pollerEngine.effSnmpMs(), ping_interval_ms: pollerEngine.effPingMs() });
 });
 
 module.exports = router;

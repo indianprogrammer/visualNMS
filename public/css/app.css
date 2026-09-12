@@ -177,6 +177,24 @@ h1,h2,h3,.page-title,.card-title,.navbar-brand{font-family:'Orbitron','Rajdhani'
 #btn-theme{border:1px solid var(--nms-border);color:var(--nms-muted)}
 #btn-theme:hover{color:var(--nms-accent);border-color:var(--nms-accent);box-shadow:0 0 12px var(--nms-accent-dim)}
 
+/* ── Minimal icon-rail sidebar (desktop only; mobile top bar untouched) ── */
+@media (min-width:992px){
+  aside.navbar-vertical.navbar-expand-lg{width:4rem}
+  .navbar-expand-lg.navbar-vertical~.page-wrapper{margin-left:4rem}
+  aside.navbar-vertical .container-fluid{padding-left:.4rem;padding-right:.4rem}
+  aside.navbar-vertical .navbar-brand{display:none}
+  #nav-menu{width:100%}
+  #nav-menu .nav-item{width:100%}
+  #nav-menu .nav-link{justify-content:center;padding-left:0;padding-right:0;border-left-width:3px}
+  #nav-menu .nav-link-title{display:none}
+  #nav-menu .nav-icon{margin:0}
+  #sidebar-menu .mt-auto{padding-left:.4rem!important;padding-right:.4rem!important;align-items:center}
+  #sidebar-menu .mt-auto .btn{font-size:0;padding-left:0;padding-right:0;justify-content:center}
+  #sidebar-menu .mt-auto .btn i{font-size:1.05rem;margin:0!important}
+  #sidebar-menu .mt-auto .btn .theme-name{display:none}
+  #sidebar-menu .mt-auto .dropdown-toggle::after{display:none}
+}
+
 /* ── Cards / stats ── */
 .card{background:var(--nms-panel);border:1px solid var(--nms-border);box-shadow:var(--nms-shadow);backdrop-filter:blur(8px)}
 .card-header{border-bottom:1px solid var(--nms-border)}
@@ -251,8 +269,8 @@ h1,h2,h3,.page-title,.card-title,.navbar-brand{font-family:'Orbitron','Rajdhani'
 .tpm-item:hover{background:var(--nms-accent);color:#fff}
 .tpm-back{color:var(--nms-muted)}
 .tpm-sep{height:1px;background:var(--nms-border);margin:5px 4px}
-#node-tip{position:absolute;z-index:40;display:none;min-width:190px;max-width:260px;background:var(--nms-tip);border:1px solid var(--nms-accent);border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.55;color:var(--nms-text);box-shadow:0 0 18px var(--nms-accent-dim);pointer-events:none}
-#link-tip{position:absolute;z-index:41;display:none;width:1280px;max-width:calc(100% - 8px);background:var(--nms-tip);border:1px solid var(--nms-accent);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;color:var(--nms-text);box-shadow:0 0 24px var(--nms-accent-dim);pointer-events:none}
+#node-tip{position:absolute;z-index:40;display:none;min-width:190px;max-width:260px;background:var(--nms-tip);border:1px solid var(--nms-accent);border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.55;color:var(--nms-text);box-shadow:0 0 18px var(--nms-accent-dim);pointer-events:none}
+#link-tip{position:absolute;z-index:41;display:none;width:1280px;max-width:calc(100% - 8px);background:var(--nms-tip);border:1px solid var(--nms-accent);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.55;color:var(--nms-text);box-shadow:0 0 24px var(--nms-accent-dim);pointer-events:none}
 #link-tip canvas{width:100%!important;height:520px!important}
 .tpm-form{padding:4px}
 .tpm-form input,.tpm-form select{width:100%;margin-bottom:6px;background:var(--nms-input);border:1px solid var(--nms-border-bright);color:var(--nms-text);border-radius:6px;padding:6px 8px;font-size:.85rem;box-sizing:border-box}

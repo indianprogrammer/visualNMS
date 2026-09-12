@@ -18,6 +18,15 @@ let lightCycleInProgress = false;
 let fullCycleInProgress = false;
 let lastSnmpFailSig = null;
 
+// Cycle counters: proves whether the overlap guards are starving any loop.
+// Exposed via GET /api/poller/stats. lastMs = wall time of last completed run.
+const loopStats = {
+  ping: { runs: 0, skips: 0, lastMs: null },
+  light: { runs: 0, skips: 0, lastMs: null },
+  full: { runs: 0, skips: 0, lastMs: null }
+};
+function getCycleStats() { return JSON.parse(JSON.stringify(loopStats)); }
+
 function setIO(sio) { io = sio; }
 
 const insertMetric = db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`);
@@ -25,7 +34,7 @@ const updateDevice = db.prepare(`UPDATE devices SET status=?, last_seen=datetime
 const insertLastPing = db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`);
 
 async function pingCycles() {
-  if (pingCycleInProgress) return [];
+  if (pingCycleInProgress) { loopStats.ping.skips++; return []; }
   pingCycleInProgress = true;
   const t0 = Date.now();
   try {
@@ -50,6 +59,8 @@ async function pingCycles() {
     }
 
     if (io) io.emit('poll:results', results);
+    loopStats.ping.runs++;
+    loopStats.ping.lastMs = Date.now() - t0;
     return results;
   } finally {
     pingCycleInProgress = false;
@@ -63,7 +74,7 @@ let snmpFailCount = {};
 let snmpCycleCount = 0;
 
 async function fullPoll() {
-  if (snmpCycleInProgress || fullCycleInProgress) return [];
+  if (snmpCycleInProgress || fullCycleInProgress) { loopStats.full.skips++; return []; }
   fullCycleInProgress = true;
   snmpCycleInProgress = true;
   const t0 = Date.now();
@@ -85,11 +96,14 @@ async function fullPoll() {
           try {
             snmpResult = await snmpPoller.pollDevice(device);
             if (snmpResult && !snmpResult.error) {
-              linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet).forEach((r) => cycleStats.push(r));
+              // NOTE: no recordInterfaceRates here — the light cycle owns rate
+              // math. Two writers racing on the same counters produced 0-dips
+              // and multi-Gbps spikes on 1G links.
               if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
               if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
               if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
               if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+              if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
             }
           } catch {}
           const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
@@ -116,6 +130,8 @@ async function fullPoll() {
     checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
     if (io && cycleStats.length) io.emit('link:stats', cycleStats);
+    loopStats.full.runs++;
+    loopStats.full.lastMs = Date.now() - t0;
     return results;
   } finally {
     snmpCycleInProgress = false;
@@ -126,9 +142,16 @@ async function fullPoll() {
 // Light cycle (every few seconds): CPU/RAM/disk + targeted GETs for the
 // map-bound interfaces only. Dead devices use the same consecutive-failure
 // backoff, re-probed every 12th light cycle.
+// NOTE: light no longer waits out a full poll — the old
+// `|| fullCycleInProgress` guard starved link stats/graphs for the whole
+// (multi-minute) full walk, including right after every server restart.
+// Concurrent full+light SNMP is safe: the light cycle solely owns rate math
+// (single writer — concurrent writers caused 0-dips and phantom spikes) and
+// all DB writes are synchronous/atomic via better-sqlite3.
 async function lightPoll() {
-  if (lightCycleInProgress || fullCycleInProgress) return [];
+  if (lightCycleInProgress) { loopStats.light.skips++; return []; }
   lightCycleInProgress = true;
+  const t0light = Date.now();
   try {
     snmpCycleCount++;
     const devices = db.prepare('SELECT * FROM devices').all();
@@ -165,12 +188,14 @@ async function lightPoll() {
             try {
               snmpResult = await snmpPoller.pollLight(device, bound);
               snmpResult.partial = true;
+              if (snmpResult && snmpResult.domFullPollNeeded) needFull.add(device.id);
               if (snmpResult && !snmpResult.error) {
                 linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet).forEach((r) => cycleStats.push(r));
                 if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
                 if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
                 if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
                 if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+                if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
               }
             } catch {}
           }
@@ -191,11 +216,14 @@ async function lightPoll() {
     checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
     if (io && cycleStats.length) io.emit('link:stats', cycleStats);
-    // Devices with bound interfaces missing an ifIndex mapping get one
-    // background full poll to (re)build it.
+    // Devices with bound interfaces missing an ifIndex mapping — or with a
+    // missing SFP/DOM sensor layout — get one background full poll to
+    // (re)build it.
     needFull.forEach((id) => {
       fullPollDevice(id).catch(() => {});
     });
+    loopStats.light.runs++;
+    loopStats.light.lastMs = Date.now() - t0light;
     return results;
   } finally {
     lightCycleInProgress = false;
@@ -213,11 +241,12 @@ async function fullPollDevice(deviceId) {
     try {
       snmpResult = await snmpPoller.pollDevice(device);
       if (snmpResult && !snmpResult.error) {
-        devStats = linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+        // No recordInterfaceRates: light cycle owns rate math (single writer).
         if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
         if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
         if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
         if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
+        if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
         snmpFailCount[device.id] = 0;
       } else {
         snmpFailCount[device.id] = (snmpFailCount[device.id] || 0) + 1;
@@ -303,4 +332,4 @@ function stop() {
   running = false;
 }
 
-module.exports = { setIO, pingCycles, fullPoll, lightPoll, fullPollDevice, start, stop, applyIntervals, effPingMs, effSnmpMs, FULL_SNMP_MS };
+module.exports = { setIO, pingCycles, fullPoll, lightPoll, fullPollDevice, start, stop, applyIntervals, effPingMs, effSnmpMs, getCycleStats, FULL_SNMP_MS };

@@ -75,11 +75,18 @@ function toggleTheme(){setTheme(themeName()==='light'?'dark':'light');}
 function refreshForTheme(){try{if(currentPage==='topology'&&selectedMapId){loadMap(selectedMapId);}else{navigateTo(currentPage);}}catch(e){}}
 function fmtB(b) { if(!b) return '0 B'; var u=['B','KB','MB','GB','TB']; var i=Math.floor(Math.log(b)/Math.log(1024)); return (b/Math.pow(1024,i)).toFixed(2)+' '+u[i]; }
 function fmtS(b) { if(b==null) return '-'; if(!b) return '0 bps'; if(b>=1e9)return(b/1e9).toFixed(1)+' Gbps'; if(b>=1e6)return(b/1e6).toFixed(1)+' Mbps'; if(b>=1e3)return(b/1e3).toFixed(1)+' Kbps'; return Math.round(b)+' bps'; }
-function formatLinkLabel(rxBps,txBps,statTxt) {
-  if(rxBps==null && txBps==null && !statTxt) return '';
+function fmtDbm(v) { if(v==null||!isFinite(Number(v))) return '-'; return (Math.round(Number(v)*100)/100)+' dBm'; }
+function sfpLine(rxDbm,txDbm) {
+  if(rxDbm==null && txDbm==null) return '';
+  return 'SFP Rx '+fmtDbm(rxDbm)+' Tx '+fmtDbm(txDbm);
+}
+function formatLinkLabel(rxBps,txBps,statTxt,sfpTxt) {
+  var parts=[];
   var main=(rxBps!=null||txBps!=null)?('\u25BC '+fmtS(rxBps)+' \u25B2 '+fmtS(txBps)):'';
-  if(main&&statTxt)return main+'\n'+statTxt;
-  return main||statTxt||'';
+  if(main)parts.push(main);
+  if(statTxt)parts.push(statTxt);
+  if(sfpTxt)parts.push(sfpTxt);
+  return parts.join('\n');
 }
 function opTxt(v){return v===1?'up':(v===2?'down':null);}
 function statLine(oper,admin){
@@ -101,7 +108,32 @@ function linkStatusHTML(edge){
   var dO=opTxt(edge.data('dstOper')),dA=opTxt(edge.data('dstAdmin'));
   if(edge.data('srcIf')&&(sO||sA))h+='<div class="small mb-1">Src Oper:<b>'+esc(sO||'?')+'</b> Admin:<b>'+esc(sA||'?')+'</b></div>';
   if(edge.data('dstIf')&&(dO||dA))h+='<div class="small mb-1">Dst Oper:<b>'+esc(dO||'?')+'</b> Admin:<b>'+esc(dA||'?')+'</b></div>';
+  h+=sfpStatusHTML(edge);
   return h;
+}
+function sfpStatusHTML(edge){
+  if(!edge||!edge.length)return '';
+  var h='';
+  var sR=edge.data('srcSfpRx'),sT=edge.data('srcSfpTx'),dR=edge.data('dstSfpRx'),dT=edge.data('dstSfpTx');
+  var hasSrc=(sR!=null||sT!=null),hasDst=(dR!=null||dT!=null);
+  if(hasSrc&&hasDst){
+    h+='<div class="small mb-1">Src SFP Rx:<b>'+esc(fmtDbm(sR))+'</b> Tx:<b>'+esc(fmtDbm(sT))+'</b></div>';
+    h+='<div class="small mb-1">Dst SFP Rx:<b>'+esc(fmtDbm(dR))+'</b> Tx:<b>'+esc(fmtDbm(dT))+'</b></div>';
+  }else{
+    var r=edge.data('sfpRx'),t=edge.data('sfpTx');
+    if(r!=null||t!=null)h+='<div class="small mb-1">SFP Rx:<b>'+esc(fmtDbm(r))+'</b> Tx:<b>'+esc(fmtDbm(t))+'</b></div>';
+    var tp=edge.data('sfpTemp');
+    if(tp!=null)h+='<div class="small text-muted mb-1">SFP temp <b>'+esc(String(tp))+' °C</b></div>';
+  }
+  return h;
+}
+// Stat-side SFP pair for the edge label (falls back to either end, so a
+// device-SFP -> internet-static link shows the device optics).
+function edgeSfpLine(e){
+  if(!e||!e.length)return '';
+  var r=e.data('sfpRx'),t=e.data('sfpTx');
+  if(r==null&&t==null){r=e.data('srcSfpRx')!=null?e.data('srcSfpRx'):e.data('dstSfpRx');t=e.data('srcSfpTx')!=null?e.data('srcSfpTx'):e.data('dstSfpTx');}
+  return sfpLine(r,t);
 }
 function dChart(k) { if(charts[k]){charts[k].destroy();charts[k]=null;} }
 function pTitle(t) { var e=document.getElementById('page-title'); if(e)e.textContent=t; }
@@ -136,7 +168,7 @@ function connectSocket() {
   try {
     socket = io({auth:{token:AUTH_TOKEN}});
     socket.on('connect',function(){console.log('[WS] Connected');});
-    socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);liveDevicePing(r);});
+    socket.on('poll:results',function(r){if(currentPage==='dashboard')liveDash(r);if(currentPage==='topology')liveTopo(r);liveDevicePing(r);liveNodeTipPing(r);});
     socket.on('alert:new',function(a){toast(a.severity.toUpperCase()+': '+a.message,a.severity);if(currentPage==='alerts')loadAlerts();});
     socket.on('discovery:complete',function(r){toast('Found '+r.devicesFound+' in '+r.subnet,'success');if(currentPage==='discovery')loadDiscovery();});
     socket.on('poll:snmp',function(r){liveDeviceIf(r);updateLinkOper(r);liveTopoSnmp(r);});
@@ -146,7 +178,7 @@ function connectSocket() {
 }
 function bindNav() {
   var links = document.querySelectorAll('#nav-menu .nav-link');
-  for(var i=0;i<links.length;i++){(function(l){l.addEventListener('click',function(e){e.preventDefault();navigateTo(l.getAttribute('data-page'));});})(links[i]);}
+  for(var i=0;i<links.length;i++){(function(l){var t=l.querySelector('.nav-link-title');if(t&&!l.getAttribute('title'))l.setAttribute('title',t.textContent);l.addEventListener('click',function(e){e.preventDefault();navigateTo(l.getAttribute('data-page'));});})(links[i]);}
   document.getElementById('btn-logout').onclick = doLogout;
 }
 function navigateTo(page) {
@@ -215,7 +247,8 @@ function editDevice(id){api('/devices/'+id).then(function(d){openDevModal(d);}).
 function delDevice(id){if(!confirm('Delete this device?'))return;api('/devices/'+id,{method:'DELETE'}).then(function(){toast('Deleted','success');loadDevices();});}
 function ifRow(i){
   var st=i.if_oper_status===1?['up','Up']:(i.if_oper_status===2?['down','Down']:['unknown','?']);
-  return '<tr><td>'+i.if_index+'</td><td>'+esc(i.if_name||'')+'</td><td><span class="status-dot '+st[0]+'"></span>'+st[1]+'</td><td>'+fmtS(i.if_speed)+'</td><td>'+fmtB(i.if_in_octets)+'</td><td>'+fmtB(i.if_out_octets)+'</td><td>'+((i.if_in_errors||0)+(i.if_out_errors||0))+'</td></tr>';
+  var sfp=(i.sfp_rx_dbm!=null||i.sfp_tx_dbm!=null)?('<span class="text-nowrap">Rx '+esc(fmtDbm(i.sfp_rx_dbm))+' / Tx '+esc(fmtDbm(i.sfp_tx_dbm))+'</span>'):'-';
+  return '<tr><td>'+i.if_index+'</td><td>'+esc(i.if_name||'')+'</td><td><span class="status-dot '+st[0]+'"></span>'+st[1]+'</td><td>'+fmtS(i.if_speed)+'</td><td>'+fmtB(i.if_in_octets)+'</td><td>'+fmtB(i.if_out_octets)+'</td><td>'+((i.if_in_errors||0)+(i.if_out_errors||0))+'</td><td>'+sfp+'</td></tr>';
 }
 function liveDeviceIf(results){
   if(!window._viewDevId)return;
@@ -247,7 +280,7 @@ function viewDevice(id) {
   window._viewDevId=id;
   Promise.all([api('/devices/'+id),api('/devices/'+id+'/metrics?limit=100'),api('/devices/'+id+'/interfaces')]).then(function(a){
     var d=a[0],mx=a[1],ifc=a[2];
-    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex align-items-center gap-2"><button class="btn btn-ghost btn-sm" onclick="loadDevices()"><i class="ti ti-arrow-left"></i></button><h3 class="mb-0">'+esc(d.name)+'</h3><span class="badge bg-'+(d.status==='up'?'success':'danger')+'">'+d.status+'</span></div><div class="d-flex gap-2"><button class="btn btn-primary btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i> Edit</button></div></div><div class="row mb-3"><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">IP</div><div class="fw-bold">'+d.ip_address+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Type</div><div class="fw-bold">'+d.device_type+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Last Seen</div><div class="fw-bold">'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">SNMP</div><div class="fw-bold">v'+d.snmp_version+'</div></div></div></div></div><div class="row mb-3"><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Ping Latency</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-ping"></canvas></div></div></div></div><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">CPU & Memory</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-cpu"></canvas></div></div></div></div></div>'+(ifc.length?'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Interfaces <span class="live-indicator ms-1"></span></h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th></tr></thead><tbody id="dev-if-tb">'+ifc.map(ifRow).join('')+'</tbody></table></div></div>':'')+'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Actions</h3></div><div class="card-body d-flex gap-2"><button class="btn btn-primary" onclick="pingDev('+d.id+')"><i class="ti ti-send"></i> Ping</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'traceroute\')"><i class="ti ti-route"></i> Traceroute</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'portscan\')"><i class="ti ti-network"></i> Port Scan</button></div></div>');
+    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex align-items-center gap-2"><button class="btn btn-ghost btn-sm" onclick="loadDevices()"><i class="ti ti-arrow-left"></i></button><h3 class="mb-0">'+esc(d.name)+'</h3><span class="badge bg-'+(d.status==='up'?'success':'danger')+'">'+d.status+'</span></div><div class="d-flex gap-2"><button class="btn btn-primary btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i> Edit</button></div></div><div class="row mb-3"><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">IP</div><div class="fw-bold">'+d.ip_address+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Type</div><div class="fw-bold">'+d.device_type+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Last Seen</div><div class="fw-bold">'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">SNMP</div><div class="fw-bold">v'+d.snmp_version+'</div></div></div></div></div><div class="row mb-3"><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Ping Latency</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-ping"></canvas></div></div></div></div><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">CPU & Memory</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-cpu"></canvas></div></div></div></div></div>'+(ifc.length?'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Interfaces <span class="live-indicator ms-1"></span></h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th><th>SFP Rx/Tx</th></tr></thead><tbody id="dev-if-tb">'+ifc.map(ifRow).join('')+'</tbody></table></div></div>':'')+'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Actions</h3></div><div class="card-body d-flex gap-2"><button class="btn btn-primary" onclick="pingDev('+d.id+')"><i class="ti ti-send"></i> Ping</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'traceroute\')"><i class="ti ti-route"></i> Traceroute</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'portscan\')"><i class="ti ti-network"></i> Port Scan</button></div></div>');
     var pd=mx.filter(function(m){return m.metric_type==='ping';}).reverse();
     var cd=mx.filter(function(m){return m.metric_type==='cpu';}).reverse();
     var md=mx.filter(function(m){return m.metric_type==='memory';}).reverse();
@@ -297,13 +330,13 @@ function loadMap(mapId) {
     md.nodes.forEach(function(n){els.push(topoNodeEl(n));});
     md.links.forEach(function(l){els.push(topoLinkEl(l));});
     cy=cytoscape({container:document.getElementById('cy-topo'),elements:els,layout:{name:'preset'},zoom:1,minZoom:0.1,maxZoom:4,boxSelectionEnabled:false,autoungrabify:false,autounselectify:false,userZoomingEnabled:true,userPanningEnabled:true,style:[
-      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':70,'font-size':'12px','font-weight':'bold','color':thLabel(),'text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
+      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':70,'font-size':'10px','font-weight':'bold','color':thLabel(),'text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
       {selector:'node:grabbed',style:{'cursor':'grabbing','border-width':3,'border-color':'#357bfd'}},
       {selector:'node.wireless_ap',style:{'shape':'ellipse'}},
       {selector:'node.network',style:{'shape':'ellipse','background-color':thNetworkBg(),'border-style':'dashed','border-color':'#5b8fd4'}},
       {selector:'node.submap',style:{'background-color':thSubmapBg(),'border-style':'double','border-color':'#7c8aff'}},
       {selector:'node.static',style:{'shape':'ellipse','width':22,'height':22,'background-color':thStaticBg(),'border-color':'rgba(255,255,255,0.3)','font-size':'11px','text-max-width':'120px'}},
-      {selector:'edge',style:{'width':2,'line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':thText(),'text-background-color':thEdgeLabelBg(),'text-background-opacity':0.9,'text-wrap':'wrap','edge-text-rotation':'autorotate','text-margin-y':-12,'text-outline-width':0}},
+      {selector:'edge',style:{'width':'data(lineW)','line-color':'#4a5060','target-arrow-color':'#4a5060','target-arrow-shape':'triangle','curve-style':'bezier','label':'data(label)','font-size':'10px','color':thText(),'text-background-color':thEdgeLabelBg(),'text-background-opacity':0.9,'text-wrap':'wrap','edge-text-rotation':'autorotate','text-margin-y':-12,'text-outline-width':0}},
       {selector:'.down',style:{'line-color':'#e53e3e'}},
       {selector:'.up',style:{'line-color':'#2fb344'}},
       {selector:':selected',style:{'border-width':3,'border-color':'#357bfd'}}
@@ -344,6 +377,8 @@ function loadMap(mapId) {
       tip.style.left=Math.min(Math.max(c.left-r.left+rp.x,110),Math.max(110,r.width-110))+'px';
       tip.style.top=Math.max(c.top-r.top+rp.y-12,148)+'px';
       tip.style.transform='translate(-50%,-100%)';
+      var did=e.target.data('deviceId');
+      if(did){_nodeTipTargetDev=did;setTimeout(function(){initNodeTipChart(did);},0);}
     });
     cy.on('mouseout grab','node',function(e){hideNodeTip();if(e.target&&e.target.hasClass&&e.target.hasClass('static')){e.target.data('_hover',false);renderNodeLabel(e.target);}});
     cy.on('pan zoom',function(){hideNodeTip();hideLinkTip();if(cy)cy.nodes('.static').forEach(function(n){n.data('_hover',false);renderNodeLabel(n);});});
@@ -427,10 +462,11 @@ function snmpTable(r,round){
   var h='<div class="small text-muted mb-2">HOST: '+esc(r.ip||'')+' &middot; round '+round+' &middot; updated '+new Date().toLocaleTimeString()+'</div>';
   h+='<div class="d-flex gap-3 mb-2 small"><span>CPU: <b>'+(r.cpuLoad!=null?r.cpuLoad+' %':'-')+'</b></span><span>Memory: <b>'+(r.memoryPct!=null?r.memoryPct+' %':'-')+'</b></span><span>Interfaces: <b>'+(r.interfaces?r.interfaces.length:0)+'</b></span></div>';
   h+='<div class="small text-muted mb-1">'+esc(r.sysName||'')+(r.sysDescr?' &middot; '+esc(String(r.sysDescr).slice(0,120)):'')+'</div>';
-  h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th></tr></thead><tbody>';
+  h+='<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th><th>SFP Rx/Tx</th></tr></thead><tbody>';
   (r.interfaces||[]).forEach(function(i){
     var op=i.if_oper_status==1?'<span class="text-success">up</span>':(i.if_oper_status==2?'<span class="text-danger">down</span>':'?');
-    h+='<tr><td>'+i.if_index+'</td><td><code>'+esc(i.if_name||'')+'</code></td><td>'+op+'</td><td>'+fmtS(i.if_speed||0)+'</td><td>'+fmtB(i.if_in_octets||0)+'</td><td>'+fmtB(i.if_out_octets||0)+'</td><td>'+((i.if_in_errors||0)+(i.if_out_errors||0))+'</td></tr>';
+    var sfp=(i.sfp_rx_dbm!=null||i.sfp_tx_dbm!=null)?('<span class="text-nowrap">Rx '+esc(fmtDbm(i.sfp_rx_dbm))+' / Tx '+esc(fmtDbm(i.sfp_tx_dbm))+'</span>'):'-';
+    h+='<tr><td>'+i.if_index+'</td><td><code>'+esc(i.if_name||'')+'</code></td><td>'+op+'</td><td>'+fmtS(i.if_speed||0)+'</td><td>'+fmtB(i.if_in_octets||0)+'</td><td>'+fmtB(i.if_out_octets||0)+'</td><td>'+((i.if_in_errors||0)+(i.if_out_errors||0))+'</td><td>'+sfp+'</td></tr>';
   });
   return h+'</tbody></table></div>';
 }
@@ -496,7 +532,7 @@ function showTopoLinkMenu(px,py,edge){
   else statsHtml+='<div class="small text-muted mb-1">No interface bound — recreate with interface picker</div>';
   if(rxOct!=null||txOct!=null) statsHtml+='<div class="small text-muted mb-1">Total \u25BC '+esc(fmtB(rxOct))+' &nbsp; \u25B2 '+esc(fmtB(txOct))+'</div>';
   statsHtml+=linkStatusHTML(edge);
-  m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">'+esc(label)+'</div>'+statsHtml+'<button class="tpm-item" data-act="del-link">Delete</button></div>';
+  m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">'+esc(label)+'</div>'+statsHtml+'<button class="tpm-item" data-act="edit-link">Edit</button><button class="tpm-item" data-act="del-link">Delete</button></div>';
   var linkId=String(edge.data('id')||'').replace(/^l-/,'');
   m.onclick=function(ev){
     var b=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!b||!m.contains(b))return;
@@ -505,8 +541,56 @@ function showTopoLinkMenu(px,py,edge){
       hideTopoMenu();
       api('/maps/'+selectedMapId+'/links/'+linkId,{method:'DELETE'}).then(function(){toast('Link deleted','success');});
     }
+    if(b.getAttribute('data-act')==='edit-link'){topoLinkEditForm(m,edge,linkId);}
   };
   w.appendChild(m);
+}
+var _linkSpeeds=[[1e7,'10 Mbps'],[1e8,'100 Mbps'],[1e9,'1 Gbps'],[2.5e9,'2.5 Gbps'],[5e9,'5 Gbps'],[1e10,'10 Gbps'],[2.5e10,'25 Gbps'],[4e10,'40 Gbps'],[1e11,'100 Gbps']];
+function topoLinkEditForm(m,edge,linkId){
+  var src=cy.getElementById(edge.data('source')),tgt=cy.getElementById(edge.data('target'));
+  var srcDev=src&&src.length?src.data('deviceId'):null,tgtDev=tgt&&tgt.length?tgt.data('deviceId'):null;
+  var srcName=src&&src.length?src.data('name'):'?',tgtName=tgt&&tgt.length?tgt.data('name'):'?';
+  var curSrcIf=edge.data('srcIf')||'',curDstIf=edge.data('dstIf')||'';
+  Promise.all([
+    srcDev?api('/devices/'+srcDev+'/interfaces').catch(function(){return [];}):Promise.resolve(null),
+    tgtDev?api('/devices/'+tgtDev+'/interfaces').catch(function(){return [];}):Promise.resolve(null),
+    api('/maps/'+selectedMapId).then(function(mp){var ls=(mp&&mp.links)||[];for(var i=0;i<ls.length;i++)if(String(ls[i].id)===String(linkId))return ls[i];return null;}).catch(function(){return null;})
+  ]).then(function(a){
+    var srcIfs=a[0],dstIfs=a[1],raw=a[2];
+    var curSpeed=raw&&raw.max_speed_bps!=null?Number(raw.max_speed_bps):null;
+    function sel(list,cur,isStatic){
+      if(isStatic)return '<select class="form-select form-select-sm mb-1" disabled><option>(static endpoint)</option></select>';
+      var h='<select class="form-select form-select-sm mb-1">';
+      h+='<option value="">(no interface)</option>';
+      (list||[]).forEach(function(i){
+        if(!i.if_name)return;
+        h+='<option value="'+esc(i.if_name)+'"'+(i.if_name===cur?' selected':'')+'>'+esc(i.if_name)+'</option>';
+      });
+      if(cur&&!(list||[]).some(function(i){return i.if_name===cur;}))h+='<option value="'+esc(cur)+'" selected>'+esc(cur)+' (stale)</option>';
+      return h+'</select>';
+    }
+    var spOpts='<option value="auto"'+(curSpeed==null?' selected':'')+'>Auto (SNMP speed)</option>'+_linkSpeeds.map(function(s){return '<option value="'+s[0]+'"'+(Number(curSpeed)===s[0]?' selected':'')+'>'+s[1]+'</option>';}).join('');
+    if(curSpeed!=null&&!_linkSpeeds.some(function(s){return s[0]===Number(curSpeed);}))spOpts+='<option value="'+curSpeed+'" selected>'+esc(fmtS(curSpeed))+' (custom)</option>';
+    m.innerHTML='<div class="tpm-form"><div class="small text-muted mb-1">Edit link</div>'
+      +'<div class="small text-muted">Source: '+esc(srcName)+'</div><div data-f="src">'+sel(srcIfs,curSrcIf,!srcDev)+'</div>'
+      +'<div class="small text-muted">Target: '+esc(tgtName)+'</div><div data-f="dst">'+sel(dstIfs,curDstIf,!tgtDev)+'</div>'
+      +'<div class="small text-muted">Interface speed</div><div data-f="spd"><select class="form-select form-select-sm mb-1">'+spOpts+'</select></div>'
+      +'<button class="btn btn-primary btn-sm w-100 mb-1" data-act="save-link">Save</button><button class="tpm-item tpm-back" data-act="__backlink">‹ Back</button></div>';
+    m.onclick=function(ev){
+      var bb=ev.target&&ev.target.closest?ev.target.closest('button'):null;if(!bb||!m.contains(bb))return;
+      var act=bb.getAttribute('data-act');
+      if(act==='__backlink'){hideTopoMenu();return;}
+      if(act==='save-link'){
+        var ssrc=m.querySelector('[data-f="src"] select'),ddst=m.querySelector('[data-f="dst"] select'),ssp=m.querySelector('[data-f="spd"] select');
+        var spdVal=ssp?ssp.value:'auto';
+        var body={max_speed_bps:(spdVal==='auto'?null:parseInt(spdVal))};
+        if(ssrc&&!ssrc.disabled)body.source_interface=ssrc.value||null;
+        if(ddst&&!ddst.disabled)body.target_interface=ddst.value||null;
+        hideTopoMenu();
+        api('/maps/'+selectedMapId+'/links/'+linkId,{method:'PUT',body:body}).then(function(){toast('Link updated','success');if(!socket||!socket.connected)loadMap(selectedMapId);}).catch(function(){toast('Update failed','critical');});
+      }
+    };
+  });
 }
 function openSubMap(mid){mid=parseInt(mid);if(!mid)return;var s=document.getElementById('topo-sel');if(s)s.value=mid;selectedMapId=mid;hideTopoMenu();var t=document.getElementById('topo-tools');if(t)t.style.display='';loadMap(mid);}
 function showTopoElMenu(px,py,el){
@@ -704,11 +788,30 @@ function topoIfPicker(node,cb){
 function topoAddNode(){api('/devices').then(function(devs){var pl=document.getElementById('topo-palette');document.getElementById('palette-list').innerHTML=devs.map(function(d){return '<div class="palette-item" title="'+esc(d.name)+'" onclick="addNode('+selectedMapId+','+d.id+')"><div class="device-icon '+d.device_type+'" style="width:28px;height:28px;font-size:.7rem"><i class="'+iconCls(d.device_type)+'"></i></div></div>';}).join('');pl.classList.add('visible');});}
 function addNode(mapId,devId){api('/maps/'+mapId+'/nodes',{method:'POST',body:{device_id:devId,x_position:100+Math.random()*400,y_position:100+Math.random()*300}}).then(function(){document.getElementById('topo-palette').classList.remove('visible');toast('Node added','success');if(!socket||!socket.connected)loadMap(mapId);});}
 document.getElementById('btn-save-map').onclick=function(){var t=document.getElementById('mf-title').value;if(!t)return;api('/maps',{method:'POST',body:{title:t}}).then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-map')).hide();toast('Map created','success');loadTopology();});};
-function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',cpu:(n.cpu!=null?n.cpu:null),mem:(n.memory!=null?n.memory:null),disk:(n.disk!=null?n.disk:null),statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
+function topoNodeEl(n){return {data:{id:'n-'+n.id,mapNodeId:n.id,deviceId:n.device_id,subMapId:n.sub_map_id||null,name:n.custom_label||n.device_name||('Node '+n.id),ip:n.ip_address||'',mac:n.mac_address||'',lastSeen:n.last_seen||'',statusText:(n.device_status||'unknown'),lat:n.ip_address?'--':'',cpu:(n.cpu!=null?n.cpu:null),mem:(n.memory!=null?n.memory:null),disk:(n.disk!=null?n.disk:null),uptime:(n.uptime!=null?n.uptime:null),statusColor:sColor(n.device_status||'unknown'),deviceType:n.device_type||'generic'},position:{x:n.x_position,y:n.y_position},classes:n.device_id?(n.device_type||'generic'):((n.icon_name==='network'||n.icon_name==='submap')?n.icon_name:'static')};}
+function fmtUptime(cs){var s=Math.floor(Number(cs)/100);if(!isFinite(s)||s<0)return '-';var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);if(d>0)return d+'d '+h+'h';if(h>0)return h+'h '+m+'m';if(m>0)return m+'m '+(s%60)+'s';return s+'s';}
+// Port speed -> line width: 10M thin, 100M normal, 1G thick, 10G+ thicker.
+function linkWidthForSpeed(bps){
+  var s=Number(bps);
+  if(!isFinite(s)||s<=0)return 2;
+  if(s<100e6)return 1;
+  if(s<1e9)return 2;
+  if(s<10e9)return 3;
+  if(s<=40e9)return 5;
+  return 7;
+}
 function topoLinkEl(l){
   var pOper=(l.source_interface!=null?l.src_oper:l.dst_oper),pAdmin=(l.source_interface!=null?l.src_admin:l.dst_admin);
   if(pOper==null&&pAdmin==null){pOper=l.src_oper!=null?l.src_oper:l.dst_oper;pAdmin=l.src_admin!=null?l.src_admin:l.dst_admin;}
-  return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),srcOper:(l.src_oper!=null?l.src_oper:null),srcAdmin:(l.src_admin!=null?l.src_admin:null),dstOper:(l.dst_oper!=null?l.dst_oper:null),dstAdmin:(l.dst_admin!=null?l.dst_admin:null),label:formatLinkLabel(l.rx_bps,l.tx_bps,statLine(pOper,pAdmin))},classes:'device-link'};
+  var sp=linkSfpPair(l);
+  return {data:{id:'l-'+l.id,source:'n-'+l.source_node_id,target:'n-'+l.target_node_id,srcIf:l.source_interface||null,dstIf:l.target_interface||null,statIf:l.stat_if_name||l.source_interface||l.target_interface||null,lineW:linkWidthForSpeed(l.stat_speed_bps!=null?l.stat_speed_bps:l.max_speed_bps),rxBps:(l.rx_bps!=null?l.rx_bps:null),txBps:(l.tx_bps!=null?l.tx_bps:null),rxOctets:(l.rx_octets!=null?l.rx_octets:null),txOctets:(l.tx_octets!=null?l.tx_octets:null),srcOper:(l.src_oper!=null?l.src_oper:null),srcAdmin:(l.src_admin!=null?l.src_admin:null),dstOper:(l.dst_oper!=null?l.dst_oper:null),dstAdmin:(l.dst_admin!=null?l.dst_admin:null),sfpRx:sp.rx,sfpTx:sp.tx,sfpTemp:(l.sfp_temp_c!=null?l.sfp_temp_c:null),srcSfpRx:(l.src_sfp_rx_dbm!=null?l.src_sfp_rx_dbm:null),srcSfpTx:(l.src_sfp_tx_dbm!=null?l.src_sfp_tx_dbm:null),dstSfpRx:(l.dst_sfp_rx_dbm!=null?l.dst_sfp_rx_dbm:null),dstSfpTx:(l.dst_sfp_tx_dbm!=null?l.dst_sfp_tx_dbm:null),isFiber:!!l.is_fiber,label:formatLinkLabel(l.rx_bps,l.tx_bps,statLine(pOper,pAdmin),sfpLine(sp.rx,sp.tx))},classes:'device-link'};
+}
+// Stat-side SFP pair from a raw /api link row (falls back to either end).
+function linkSfpPair(l){
+  if(!l)return {rx:null,tx:null};
+  var rx=(l.sfp_rx_dbm!=null?l.sfp_rx_dbm:(l.src_sfp_rx_dbm!=null?l.src_sfp_rx_dbm:l.dst_sfp_rx_dbm));
+  var tx=(l.sfp_tx_dbm!=null?l.sfp_tx_dbm:(l.src_sfp_tx_dbm!=null?l.src_sfp_tx_dbm:l.dst_sfp_tx_dbm));
+  return {rx:(rx!=null?rx:null),tx:(tx!=null?tx:null)};
 }
 function _linkKey(devId,ifName){return devId+'|'+ifName;}
 function edgeStatTarget(e){
@@ -725,7 +828,7 @@ function edgeStatusLine(e){
   var pAdmin=e.data('srcIf')?e.data('srcAdmin'):e.data('dstAdmin');
   return statLine(pOper,pAdmin);
 }
-// Oper/admin refresh from poll:snmp interface payloads (both ends).
+// Oper/admin (+SFP/DOM) refresh from poll:snmp interface payloads (both ends).
 function updateLinkOper(results){
   if(!cy||!results||!results.length)return;
   var liveIfByKey={};
@@ -733,9 +836,17 @@ function updateLinkOper(results){
     if(!x||!x.snmp||!x.snmp.interfaces||x.deviceId==null)return;
     x.snmp.interfaces.forEach(function(i){
       if(!i||!i.if_name) return;
-      liveIfByKey[_linkKey(x.deviceId,i.if_name)]={oper:(i.if_oper_status!=null?i.if_oper_status:null),admin:(i.if_admin_status!=null?i.if_admin_status:null)};
+      liveIfByKey[_linkKey(x.deviceId,i.if_name)]={oper:(i.if_oper_status!=null?i.if_oper_status:null),admin:(i.if_admin_status!=null?i.if_admin_status:null),sfpRx:i.sfp_rx_dbm,sfpTx:i.sfp_tx_dbm,sfpTemp:i.sfp_temp_c};
     });
   });
+  function applySfp(e,which,live){
+    if(!live)return false;
+    var changed=false;
+    if(live.sfpRx!=null&&live.sfpRx!==e.data(which==='s'?'srcSfpRx':'dstSfpRx')){e.data(which==='s'?'srcSfpRx':'dstSfpRx',live.sfpRx);changed=true;}
+    if(live.sfpTx!=null&&live.sfpTx!==e.data(which==='s'?'srcSfpTx':'dstSfpTx')){e.data(which==='s'?'srcSfpTx':'dstSfpTx',live.sfpTx);changed=true;}
+    if(live.sfpTemp!=null){var cur=e.data('sfpTemp');if(cur!==live.sfpTemp){e.data('sfpTemp',live.sfpTemp);changed=true;}}
+    return changed;
+  }
   cy.edges().forEach(function(e){
     try{
       var src=cy.getElementById(e.data('source')),tgt=cy.getElementById(e.data('target'));
@@ -744,13 +855,28 @@ function updateLinkOper(results){
       var tLive=tgtDev&&e.data('dstIf')?liveIfByKey[_linkKey(tgtDev,e.data('dstIf'))]:null;
       if(sLive){e.data('srcOper',sLive.oper);e.data('srcAdmin',sLive.admin);}
       if(tLive){e.data('dstOper',tLive.oper);e.data('dstAdmin',tLive.admin);}
-      if(sLive||tLive){
+      var sfpChanged=applySfp(e,'s',sLive)||applySfp(e,'d',tLive);
+      if(sfpChanged)syncEdgeSfpPrimary(e);
+      if(sLive||tLive||sfpChanged){
         applyLinkStatus(e);
-        var lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),edgeStatusLine(e));
+        var lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),edgeStatusLine(e),edgeSfpLine(e));
         if(lbl!==e.data('label'))e.data('label',lbl);
       }
     }catch(err){}
   });
+}
+// Keep the label-side sfpRx/sfpTx in sync with the per-end values,
+// preferring the stat side (the same side the server enriches).
+function syncEdgeSfpPrimary(e){
+  if(!e||!e.length)return;
+  var sR=e.data('srcSfpRx'),sT=e.data('srcSfpTx'),dR=e.data('dstSfpRx'),dT=e.data('dstSfpTx');
+  var statIf=e.data('statIf'),srcIf=e.data('srcIf'),dstIf=e.data('dstIf');
+  var statIsSrc=true;
+  if(statIf!=null&&dstIf!=null&&statIf===dstIf&&statIf!==srcIf)statIsSrc=false;
+  var r=statIsSrc?(sR!=null?sR:dR):(dR!=null?dR:sR);
+  var t=statIsSrc?(sT!=null?sT:dT):(dT!=null?dT:sT);
+  if(e.data('sfpRx')!==r)e.data('sfpRx',r!=null?r:null);
+  if(e.data('sfpTx')!==t)e.data('sfpTx',t!=null?t:null);
 }
 // Live rates pushed by the server every cycle (single source of truth —
 // same numbers the hover graph draws). Also feeds the open tooltip live.
@@ -763,12 +889,30 @@ function updateLinkRates(stats){
       var t=edgeStatTarget(e);
       if(!t)return;
       var s=byKey[t.dev+'|'+t.ifn];
-      if(!s||(s.rxBps==null&&s.txBps==null))return;
-      e.data('rxBps',s.rxBps);e.data('txBps',s.txBps);
-      if(s.rxOctets!=null)e.data('rxOctets',s.rxOctets);
-      if(s.txOctets!=null)e.data('txOctets',s.txOctets);
-      var lbl=formatLinkLabel(s.rxBps,s.txBps,edgeStatusLine(e));
-      if(lbl!==e.data('label'))e.data('label',lbl);
+      if(!s)return;
+      var changed=false;
+      if(s.rxBps!=null||s.txBps!=null){
+        e.data('rxBps',s.rxBps);e.data('txBps',s.txBps);
+        if(s.rxOctets!=null)e.data('rxOctets',s.rxOctets);
+        if(s.txOctets!=null)e.data('txOctets',s.txOctets);
+        changed=true;
+      }
+      // Live SFP: only real readings may overwrite the edge — a cycle with
+      // no DOM data (miss/anomaly carry, skipped walk) must never wipe the
+      // label's SFP line. Stale values clear on map reload via enrichLink.
+      if(s.sfpRxDbm!=null||s.sfpTxDbm!=null||s.sfpTempC!=null){
+        var src=cy.getElementById(e.data('source'));
+        var isSrc=src&&src.length&&src.data('deviceId')===t.dev&&e.data('srcIf')===t.ifn;
+        if(s.sfpRxDbm!=null)e.data(isSrc?'srcSfpRx':'dstSfpRx',s.sfpRxDbm);
+        if(s.sfpTxDbm!=null)e.data(isSrc?'srcSfpTx':'dstSfpTx',s.sfpTxDbm);
+        if(s.sfpTempC!=null)e.data('sfpTemp',s.sfpTempC);
+        syncEdgeSfpPrimary(e);
+        changed=true;
+      }
+      if(changed){
+        var lbl=formatLinkLabel(e.data('rxBps'),e.data('txBps'),edgeStatusLine(e),edgeSfpLine(e));
+        if(lbl!==e.data('label'))e.data('label',lbl);
+      }
     }catch(err){}
   });
   liveLinkTip(stats);
@@ -801,10 +945,16 @@ function applyMapUpdate(u){
     if(cy.getElementById('n-'+u.link.source_node_id).length&&cy.getElementById('n-'+u.link.target_node_id).length){var le=cy.add(topoLinkEl(u.link));applyLinkStatus(le);}
   }else if(t==='link-deleted'&&u.id){
     cy.remove(cy.getElementById('l-'+u.id));
+  }else if(t==='link-updated'&&u.link){
+    var old=cy.getElementById('l-'+u.link.id);
+    if(old.length&&cy.getElementById('n-'+u.link.source_node_id).length&&cy.getElementById('n-'+u.link.target_node_id).length){
+      cy.remove(old);
+      var le=cy.add(topoLinkEl(u.link));applyLinkStatus(le);
+    }
   }
 }
 function capTip(s){s=String(s||'');return s?s.charAt(0).toUpperCase()+s.slice(1):s;}
-function hideNodeTip(){var t=document.getElementById('node-tip');if(t)t.style.display='none';}
+function hideNodeTip(){var t=document.getElementById('node-tip');if(t)t.style.display='none';_nodeTipTargetDev=null;if(_nodeTipChart){try{_nodeTipChart.destroy();}catch(e){}_nodeTipChart=null;}}
 var _linkTipChart=null,_linkTipRun=0,_linkTipCache={},_linkTipTarget=null;
 function hideLinkTip(){_linkTipTarget=null;var t=document.getElementById('link-tip');if(t)t.style.display='none';if(_linkTipChart){try{_linkTipChart.destroy();}catch(e){}_linkTipChart=null;}}
 function linkStatTarget(edge){
@@ -850,8 +1000,10 @@ function showLinkTip(e){
     return;
   }
   var rxNow=edge.data('rxBps'),txNow=edge.data('txBps');
+  var sfpH=sfpLine(edge.data('sfpRx'),edge.data('sfpTx'));
   tip.innerHTML='<div class="fw-bold"><code>'+esc(tgt.ifn)+'</code></div>'
     +'<div class="small text-muted mb-1 link-tip-rates">\u25BC Rx '+esc(fmtS(rxNow))+' &nbsp; \u25B2 Tx '+esc(fmtS(txNow))+'</div>'
+    +(sfpH?'<div class="small text-muted mb-1 link-tip-sfp">'+esc(sfpH)+'</div>':'')
     +linkStatusHTML(edge)
     +'<div class="small text-muted" id="link-tip-status">Loading graph…</div><canvas id="link-tip-chart"></canvas>';
   tip.style.display='block';
@@ -919,6 +1071,23 @@ function liveLinkTip(stats){
   for(var i=0;i<stats.length;i++){
     var s=stats[i];
     if(!s||s.deviceId!==t.dev||s.ifName!==t.ifn)continue;
+    var edge=cy?cy.getElementById(t.edgeId):null;
+    if(s.sfpRxDbm!=null||s.sfpTxDbm!=null||s.sfpTempC!=null){
+      if(edge&&edge.length){
+        var src=cy.getElementById(edge.data('source'));
+        var isSrc=src&&src.length&&src.data('deviceId')===s.deviceId&&edge.data('srcIf')===s.ifName;
+        if(s.sfpRxDbm!=null)edge.data(isSrc?'srcSfpRx':'dstSfpRx',s.sfpRxDbm);
+        if(s.sfpTxDbm!=null)edge.data(isSrc?'srcSfpTx':'dstSfpTx',s.sfpTxDbm);
+        if(s.sfpTempC!=null)edge.data('sfpTemp',s.sfpTempC);
+        syncEdgeSfpPrimary(edge);
+        var lbl=formatLinkLabel(edge.data('rxBps'),edge.data('txBps'),edgeStatusLine(edge),edgeSfpLine(edge));
+        if(lbl!==edge.data('label'))edge.data('label',lbl);
+        var hdrS=tip.querySelector('.link-tip-sfp');
+        var line=edgeSfpLine(edge);
+        if(line){if(hdrS)hdrS.textContent=line;}
+        else if(hdrS)hdrS.remove();
+      }
+    }
     if(s.rxBps==null&&s.txBps==null)continue;
     var ch=_linkTipChart;
     ch.data.labels.push(new Date().toLocaleTimeString());
@@ -926,7 +1095,6 @@ function liveLinkTip(stats){
     ch.data.datasets[1].data.push(s.txBps);
     while(ch.data.labels.length>120){ch.data.labels.shift();ch.data.datasets.forEach(function(d){d.data.shift();});}
     ch.update('none');
-    var edge=cy?cy.getElementById(t.edgeId):null;
     if(edge&&edge.length){
       var hdr=tip.querySelector('.link-tip-rates');
       if(hdr)hdr.innerHTML='\u25BC Rx '+esc(fmtS(s.rxBps))+' &nbsp; \u25B2 Tx '+esc(fmtS(s.txBps));
@@ -934,14 +1102,14 @@ function liveLinkTip(stats){
     break;
   }
 }
+var _nodeTipChart=null,_nodeTipRun=0;
 function nodeTipHTML(n){
   var d=n.data();
   if(!d.deviceId){var kind=d.subMapId?'Submap':(n.hasClass('network')?'Network':'Static object');return '<div class="fw-bold">'+esc(d.name)+'</div><div class="text-muted">'+esc(kind)+'</div>';}
   var h='<div class="fw-bold">'+esc(d.name)+' ('+esc(d.deviceType||'generic')+')</div>';
   h+='<div>IP: '+esc(d.ip||'-')+'</div>';
   if(d.mac)h+='<div>MAC: '+esc(d.mac)+'</div>';
-  if(d.lastSeen)h+='<div>Last seen: '+esc(d.lastSeen)+'</div>';
-  h+='<div>Status: <span style="color:'+d.statusColor+';font-weight:600">'+esc(capTip(d.statusText||'unknown'))+'</span></div>';
+  if(d.uptime!=null)h+='<div>Uptime: '+esc(fmtUptime(d.uptime))+'</div>';
   if(d.cpu!=null||d.mem!=null||d.disk!=null){
     h+='<div class="mt-1">'
       +(d.cpu!=null?'<div>CPU: <b>'+d.cpu+' %</b></div>':'')
@@ -949,8 +1117,37 @@ function nodeTipHTML(n){
       +(d.disk!=null?'<div>Disk: <b>'+d.disk+' %</b></div>':'')
       +'</div>';
   }
+  h+='<div class="mt-1"><div class="small text-muted mb-1">Latency</div><div style="height:80px;position:relative"><canvas id="node-tip-lat-chart"></canvas><div id="node-tip-lat-val" style="position:absolute;top:0;right:2px;font-weight:700;font-size:13px;color:var(--nms-accent);text-shadow:0 0 8px var(--nms-accent-dim);pointer-events:none"></div></div></div>';
   return h;
 }
+function setNodeTipLatVal(txt){var el=document.getElementById('node-tip-lat-val');if(el)el.textContent=txt;}
+function initNodeTipChart(nodeId){
+  if(_nodeTipChart){try{_nodeTipChart.destroy();}catch(e){}_nodeTipChart=null;}
+  var cv=document.getElementById('node-tip-lat-chart');
+  if(!cv||typeof Chart==='undefined')return;
+  _nodeTipChart=new Chart(cv,{type:'line',data:{labels:[],datasets:[{label:'ms',data:[],borderColor:'#2fb344',backgroundColor:'#2fb34422',fill:true,tension:.3,pointRadius:0,borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{display:false},y:{min:0,grid:{color:thGrid()},ticks:{color:thTick(),maxTicksLimit:4}}},plugins:{legend:{display:false}}}});
+  _nodeTipRun++;
+  var run=_nodeTipRun;
+  api('/devices/'+nodeId+'/metrics?metric_type=ping&limit=60').then(function(rows){
+    if(run!==_nodeTipRun||!_nodeTipChart)return;
+    var pts=(rows||[]).reverse();
+    _nodeTipChart.data.labels=pts.map(function(p){return new Date(p.timestamp).toLocaleTimeString();});
+    _nodeTipChart.data.datasets[0].data=pts.map(function(p){return p.value;});
+    _nodeTipChart.update('none');
+    if(pts.length){var last=pts[pts.length-1].value;setNodeTipLatVal(last==null?'DOWN':((Math.round(Number(last)*10)/10)+' ms'));}
+  }).catch(function(){});
+}
+function liveNodeTipPing(results){
+  if(!_nodeTipChart||!_nodeTipTargetDev)return;
+  (results||[]).forEach(function(x){
+    if(x.deviceId!==_nodeTipTargetDev||!x.ping)return;
+    _nodeTipChart.data.labels.push(new Date().toLocaleTimeString());
+    _nodeTipChart.data.datasets[0].data.push(x.ping.reachable?x.ping.latencyMs:null);
+    setNodeTipLatVal(x.ping.reachable?((Math.round(x.ping.latencyMs*10)/10)+' ms'):'DOWN');
+    trimChart(_nodeTipChart,60);_nodeTipChart.update('none');
+  });
+}
+var _nodeTipTargetDev=null;
 function renderNodeLabel(n){
   if(!n.data('deviceId')){
     // Static jointers: small dot, label only while hovered
@@ -979,6 +1176,7 @@ function liveTopoSnmp(results){
       if(x.snmp.cpuLoad!=null)n.data('cpu',x.snmp.cpuLoad);
       if(x.snmp.memoryPct!=null)n.data('mem',x.snmp.memoryPct);
       if(x.snmp.diskPct!=null)n.data('disk',x.snmp.diskPct);
+      if(x.snmp.sysUpTime!=null)n.data('uptime',x.snmp.sysUpTime);
       renderNodeLabel(n);
     });
   });
@@ -1075,7 +1273,7 @@ function loadSettings(){
   loadPollSettings();
   document.getElementById('btn-save-poll').onclick=function(){
     var body={ping_interval_ms:parseInt(document.getElementById('set-ping-int').value),snmp_interval_ms:parseInt(document.getElementById('set-snmp-int').value)};
-    if(!(body.ping_interval_ms>=2000&&body.ping_interval_ms<=3600000)||!(body.snmp_interval_ms>=2000&&body.snmp_interval_ms<=3600000)){toast('Intervals must be 2000-3600000 ms','critical');return;}
+    if(!(body.ping_interval_ms>=1000&&body.ping_interval_ms<=3600000)||!(body.snmp_interval_ms>=1000&&body.snmp_interval_ms<=3600000)){toast('Intervals must be 1000-3600000 ms','critical');return;}
     api('/settings',{method:'PUT',body:body}).then(function(){toast('Polling intervals updated','success');loadPollSettings();}).catch(function(){toast('Save failed','critical');});
   };
 }
