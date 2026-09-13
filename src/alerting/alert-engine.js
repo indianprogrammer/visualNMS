@@ -1,25 +1,56 @@
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const config = require('../config/config');
+const db = require('../database/db');
 
 let transporter = null;
 
+// DB-stored notification settings override env (set via Settings UI).
+function cfg(key, envVal) {
+  try {
+    const v = db.getSettingRaw('notify_' + key, null);
+    if (v !== null && v !== undefined && String(v) !== '') return v;
+  } catch {}
+  return envVal;
+}
+
 function init() {
-  if (config.alerting.smtpHost && config.alerting.smtpUser) {
-    transporter = nodemailer.createTransport({ host: config.alerting.smtpHost, port: config.alerting.smtpPort, secure: false, auth: { user: config.alerting.smtpUser, pass: config.alerting.smtpPass } });
+  const host = cfg('smtp_host', config.alerting.smtpHost);
+  const user = cfg('smtp_user', config.alerting.smtpUser);
+  if (host && user) {
+    transporter = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: cfg('smtp_pass', config.alerting.smtpPass) } });
   }
 }
 
-async function notify(alert, message) {
-  if (config.alerting.webhookUrl) {
-    axios.post(config.alerting.webhookUrl, { text: message, severity: alert.severity, source: 'Web-NMS' }, { timeout: 10000 }).catch(() => {});
+async function notify(alert, message, channels) {
+  const want = (k) => !channels || channels[k] === undefined || !!channels[k];
+  const webhookUrl = want('webhook') && cfg('webhook_url', config.alerting.webhookUrl);
+  if (webhookUrl) {
+    axios.post(webhookUrl, { text: message, severity: alert.severity, source: 'Web-NMS' }, { timeout: 10000 }).catch(() => {});
   }
-  if (config.alerting.telegramToken && config.alerting.telegramChatId) {
-    axios.post(`https://api.telegram.org/bot${config.alerting.telegramToken}/sendMessage`, { chat_id: config.alerting.telegramChatId, text: message }, { timeout: 10000 }).catch(() => {});
+  const tgToken = want('telegram') && cfg('telegram_token', config.alerting.telegramToken);
+  const tgChat = want('telegram') && cfg('telegram_chat_id', config.alerting.telegramChatId);
+  if (tgToken && tgChat) {
+    axios.post(`https://api.telegram.org/bot${tgToken}/sendMessage`, { chat_id: tgChat, text: message }, { timeout: 10000 }).catch(() => {});
   }
-  if (transporter && config.alerting.emailTo) {
-    transporter.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: config.alerting.emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});
+  // Transporter rebuilt from current settings so UI saves apply without restart.
+  if (!want('email')) {
+    if (transporter && config.alerting.emailTo && !channels) {
+      transporter.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: config.alerting.emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});
+    }
+    return;
   }
+  try {
+    const host = cfg('smtp_host', config.alerting.smtpHost);
+    const user = cfg('smtp_user', config.alerting.smtpUser);
+    const emailTo = cfg('alert_email_to', config.alerting.emailTo);
+    if (host && user && emailTo) {
+      const t = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: cfg('smtp_pass', config.alerting.smtpPass) } });
+      t.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});
+    } else if (transporter && config.alerting.emailTo) {
+      transporter.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: config.alerting.emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});
+    }
+  } catch {}
 }
 
 module.exports = { init, notify };

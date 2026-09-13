@@ -230,6 +230,15 @@ db.getSetting = function (key, fallback) {
   } catch (e) { return fallback; }
 };
 
+// Raw string getter (no numeric coercion) for URLs, tokens, hosts.
+db.getSettingRaw = function (key, fallback) {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    if (!row || row.value === null || row.value === undefined || String(row.value) === '') return fallback;
+    return String(row.value);
+  } catch (e) { return fallback; }
+};
+
 db.setSetting = function (key, value) {
   db.prepare(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value));
 };

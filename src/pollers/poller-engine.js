@@ -59,6 +59,7 @@ async function pingCycles() {
     }
 
     if (io) io.emit('poll:results', results);
+    try { checkAlertRules(results); } catch (e) { console.error('[Poller] Alert eval error:', e.message); }
     loopStats.ping.runs++;
     loopStats.ping.lastMs = Date.now() - t0;
     return results;
@@ -264,15 +265,27 @@ function checkAlertRules(results) {
   const rules = db.prepare('SELECT * FROM alert_rules WHERE enabled = 1').all();
   const insertAlert = db.prepare(`INSERT INTO alerts (device_id,severity,message) VALUES (?,?,?)`);
   const insertEvent = db.prepare(`INSERT INTO event_log (device_id,event_type,message,source,severity) VALUES (?,?,?,?,?)`);
+  let alertEngine = null;
+  try { alertEngine = require('../alerting/alert-engine'); } catch {}
 
   for (const rule of rules) {
     for (const r of results) {
       if (rule.device_id && rule.device_id !== r.deviceId) continue;
       let value;
+      let display = null;
       switch (rule.metric_type) {
         case 'cpu': value = r.snmp?.cpuLoad; break;
         case 'memory': value = r.snmp?.memoryPct; break;
         case 'disk': value = r.snmp?.diskPct; break;
+        case 'ping':
+          if (r.ping && r.ping.reachable && r.ping.latencyMs != null && r.ping.latencyMs >= 0) value = r.ping.latencyMs;
+          break;
+        case 'packet_loss':
+          if (r.ping && r.ping.packetLoss != null) value = r.ping.packetLoss;
+          break;
+        case 'status':
+          if (r.ping && r.ping.reachable !== undefined) { value = r.ping.reachable ? 1 : 0; display = r.ping.reachable ? 'up' : 'down'; }
+          break;
       }
       if (value === null || value === undefined) continue;
 
@@ -288,10 +301,18 @@ function checkAlertRules(results) {
       if (triggered) {
         const recent = db.prepare(`SELECT id FROM alerts WHERE device_id=? AND message LIKE ? AND status='active' AND created_at > datetime('now','-${rule.cooldown_seconds} seconds')`).get(r.deviceId, `%${rule.name}%`);
         if (!recent) {
-          const msg = `${rule.name}: ${rule.metric_type}=${value} on ${r.deviceName} (${r.ip})`;
+          const shown = display !== null ? display : value;
+          const msg = `${rule.name}: ${rule.metric_type}=${shown} on ${r.deviceName} (${r.ip})`;
           insertAlert.run(r.deviceId, rule.severity, msg);
           insertEvent.run(r.deviceId, 'alert', msg, 'alerting', rule.severity);
           if (io) io.emit('alert:new', { deviceId: r.deviceId, severity: rule.severity, message: msg });
+          if (alertEngine && (rule.notify_webhook || rule.notify_email || rule.notify_telegram)) {
+            try {
+              alertEngine.notify({ severity: rule.severity }, msg, {
+                webhook: !!rule.notify_webhook, email: !!rule.notify_email, telegram: !!rule.notify_telegram
+              });
+            } catch {}
+          }
         }
       }
     }

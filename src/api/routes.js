@@ -320,7 +320,11 @@ router.delete('/snmp-profiles/:id', requireAuth, (req, res) => {
 // ── Settings ──
 router.get('/settings', requireAuth, (req, res) => {
   const pollerEngine = require('../pollers/poller-engine');
-  res.json({ snmp_interval_ms: pollerEngine.effSnmpMs(), ping_interval_ms: pollerEngine.effPingMs() });
+  const notify = {};
+  for (const k of ['webhook_url', 'telegram_token', 'telegram_chat_id', 'smtp_host', 'smtp_user', 'smtp_pass', 'alert_email_to']) {
+    notify[k] = db.getSettingRaw('notify_' + k, '');
+  }
+  res.json({ snmp_interval_ms: pollerEngine.effSnmpMs(), ping_interval_ms: pollerEngine.effPingMs(), notify });
 });
 
 router.put('/settings', requireAuth, (req, res) => {
@@ -335,6 +339,13 @@ router.put('/settings', requireAuth, (req, res) => {
     const v = parseMs(b.ping_interval_ms);
     if (v === null) return res.status(400).json({ error: 'ping_interval_ms must be 1000-3600000' });
     db.setSetting('ping_interval_ms', v);
+  }
+  for (const k of ['webhook_url', 'telegram_token', 'telegram_chat_id', 'smtp_host', 'smtp_user', 'smtp_pass', 'alert_email_to']) {
+    if (b[k] !== undefined) {
+      const v = b[k] === null ? '' : String(b[k]).slice(0, 500);
+      if (k === 'webhook_url' && v !== '' && !/^https?:\/\/.+\..+/.test(v)) return res.status(400).json({ error: 'webhook_url must be an http(s) URL' });
+      db.setSetting('notify_' + k, v);
+    }
   }
   const pollerEngine = require('../pollers/poller-engine');
   pollerEngine.applyIntervals();
