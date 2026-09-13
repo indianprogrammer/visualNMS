@@ -63,6 +63,20 @@ npm install
 - Default login: **admin / admin** (created automatically on first boot — change it!).
 - Default ports: **3000** (web), **1514/udp** (syslog), **10162/udp** (SNMP traps).
 
+### Run with Docker (app image only)
+
+```bash
+docker run -d --name visualnms -p 3000:3000 \
+  -e MONGO_URI=mongodb://<mongo-host>:27017 \
+  -e JWT_SECRET=change-me \
+  indianprogrammer/visualnms:latest
+```
+
+The image bundles only the app; point `MONGO_URI` at any running MongoDB
+(local, LAN, cloud, or a linked container — e.g. connect with
+`--network host` and `MONGO_URI=mongodb://127.0.0.1:27017`). UDP 1514/10162 for
+syslog/traps can be mapped with `-p 1514:1514/udp -p 10162:10162/udp`.
+
 ## Manual
 
 ### 1. Add a device
