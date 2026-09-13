@@ -1,246 +1,220 @@
-const Database = require('better-sqlite3');
-const fs = require('fs');
-const path = require('path');
+const { MongoClient } = require('mongodb');
 const config = require('../config/config');
 
-const dbDir = path.dirname(config.database.path);
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+// MongoDB-backed data layer. Replaces the old synchronous better-sqlite3
+// API with async helpers that mirror the app's access patterns. All entities
+// keep a numeric auto-increment `id` (via the `counters` collection) so the
+// existing JSON/HTTP contract is unchanged. `_id` is Mongo's ObjectId.
+const db = {};
 
-const db = new Database(config.database.path);
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
-db.pragma('foreign_keys = ON');
+let client = null;
+let mdb = null;
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  role TEXT DEFAULT 'admin',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+const COLLECTIONS = ['counters', 'users', 'devices', 'maps', 'map_nodes', 'map_links', 'interfaces', 'metric_history', 'last_metrics', 'alerts', 'alert_rules', 'event_log', 'snmp_profiles', 'settings', 'discovery_jobs', 'link_rate_history'];
 
-CREATE TABLE IF NOT EXISTS devices (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  ip_address TEXT NOT NULL UNIQUE,
-  mac_address TEXT,
-  device_type TEXT DEFAULT 'generic',
-  status TEXT DEFAULT 'unknown',
-  snmp_community TEXT DEFAULT 'public',
-  snmp_version TEXT DEFAULT '2c',
-  snmp_port INTEGER DEFAULT 161,
-  snmp_user TEXT,
-  snmp_auth_pass TEXT,
-  snmp_priv_pass TEXT,
-  snmp_auth_protocol TEXT,
-  snmp_priv_protocol TEXT,
-  api_type TEXT,
-  http_url TEXT,
-  latitude REAL,
-  longitude REAL,
-  last_seen DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+// Last-used sequence per collection; first insert yields id 1.
+const SEED_SEQ = { users: 0, devices: 0, maps: 0, map_nodes: 0, map_links: 0, interfaces: 0, metric_history: 0, last_metrics: 0, alerts: 0, alert_rules: 0, event_log: 0, snmp_profiles: 1, discovery_jobs: 0, link_rate_history: 0 };
 
-CREATE TABLE IF NOT EXISTS maps (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  background_image TEXT,
-  parent_map_id INTEGER,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(parent_map_id) REFERENCES maps(id) ON DELETE SET NULL
-);
+async function connect() {
+  client = new MongoClient(config.database.uri, { serverSelectionTimeoutMS: 8000 });
+  await client.connect();
+  mdb = client.db(config.database.name);
 
-CREATE TABLE IF NOT EXISTS map_nodes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  map_id INTEGER NOT NULL,
-  device_id INTEGER,
-  sub_map_id INTEGER,
-  x_position INTEGER DEFAULT 100,
-  y_position INTEGER DEFAULT 100,
-  custom_label TEXT,
-  icon_name TEXT,
-  FOREIGN KEY(map_id) REFERENCES maps(id) ON DELETE CASCADE,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
-);
+  // Raw collection handles (db.col('devices')).
+  db.col = (n) => mdb.collection(n);
 
-CREATE TABLE IF NOT EXISTS map_links (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  map_id INTEGER NOT NULL,
-  source_node_id INTEGER NOT NULL,
-  target_node_id INTEGER NOT NULL,
-  source_interface TEXT,
-  target_interface TEXT,
-  max_speed_bps INTEGER DEFAULT 1000000000,
-  FOREIGN KEY(map_id) REFERENCES maps(id) ON DELETE CASCADE,
-  FOREIGN KEY(source_node_id) REFERENCES map_nodes(id) ON DELETE CASCADE,
-  FOREIGN KEY(target_node_id) REFERENCES map_nodes(id) ON DELETE CASCADE
-);
+  await ensureIndexes();
+  await seedDefaults();
+  return db;
+}
 
-CREATE TABLE IF NOT EXISTS interfaces (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id INTEGER NOT NULL,
-  if_index INTEGER NOT NULL,
-  if_name TEXT,
-  if_type INTEGER,
-  if_speed INTEGER DEFAULT 0,
-  if_oper_status INTEGER DEFAULT 0,
-  if_admin_status INTEGER DEFAULT 0,
-  if_in_octets INTEGER DEFAULT 0,
-  if_out_octets INTEGER DEFAULT 0,
-  if_in_errors INTEGER DEFAULT 0,
-  if_out_errors INTEGER DEFAULT 0,
-  last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE,
-  UNIQUE(device_id, if_index)
-);
+async function ensureIndexes() {
+  const idx = async (c, keys, opts) => mdb.collection(c).createIndex(keys, opts || {});
+  await idx('users', { username: 1 }, { unique: true });
+  await idx('devices', { ip_address: 1 }, { unique: true });
+  await idx('devices', { name: 1 });
+  await idx('interfaces', { device_id: 1, if_index: 1 }, { unique: true });
+  await idx('interfaces', { device_id: 1, if_name: 1 });
+  await idx('last_metrics', { device_id: 1, metric_type: 1 }, { unique: true });
+  await idx('metric_history', { device_id: 1, timestamp: -1 });
+  await idx('metric_history', { device_id: 1, metric_type: 1, interface_name: 1, timestamp: -1 });
+  await idx('link_rate_history', { device_id: 1, interface_name: 1, timestamp: -1 });
+  await idx('link_rate_history', { timestamp: 1 });
+  await idx('alerts', { device_id: 1, created_at: -1 });
+  await idx('alerts', { status: 1 });
+  await idx('alert_rules', { enabled: 1 });
+  await idx('event_log', { created_at: -1 });
+  await idx('event_log', { device_id: 1, created_at: -1 });
+  await idx('event_log', { event_type: 1 });
+  await idx('snmp_profiles', { name: 1 }, { unique: true });
+  await idx('map_nodes', { map_id: 1 });
+  await idx('map_links', { map_id: 1 });
+  await idx('discovery_jobs', { created_at: -1 });
+}
 
-CREATE TABLE IF NOT EXISTS metric_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id INTEGER NOT NULL,
-  metric_type TEXT NOT NULL,
-  interface_name TEXT,
-  value REAL NOT NULL,
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_mh_dev_time ON metric_history(device_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_mh_dev_type ON metric_history(device_id, metric_type, timestamp);
+async function seedDefaults() {
+  for (const [name, seq] of Object.entries(SEED_SEQ)) {
+    await mdb.collection('counters').updateOne({ _id: name }, { $setOnInsert: { seq } }, { upsert: true });
+  }
+  for (const key of ['snmp_interval_ms', 'ping_interval_ms']) {
+    await mdb.collection('settings').updateOne({ _id: key }, { $setOnInsert: { value: '5000' } }, { upsert: true });
+  }
+  const defProfile = await mdb.collection('snmp_profiles').findOne({ name: 'Default v2c' });
+  if (!defProfile) {
+    await mdb.collection('snmp_profiles').insertOne({ id: 1, name: 'Default v2c', snmp_version: '2c', snmp_community: 'public', snmp_port: 161, created_at: new Date() });
+  }
+}
 
-CREATE TABLE IF NOT EXISTS last_metrics (
-  device_id INTEGER NOT NULL,
-  metric_type TEXT NOT NULL,
-  value REAL,
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (device_id, metric_type),
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS alerts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id INTEGER,
-  severity TEXT NOT NULL,
-  message TEXT NOT NULL,
-  status TEXT DEFAULT 'active',
-  acknowledged_by INTEGER,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  acknowledged_at DATETIME,
-  resolved_at DATETIME,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS alert_rules (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  device_id INTEGER,
-  metric_type TEXT NOT NULL,
-  condition_op TEXT DEFAULT 'gt',
-  threshold REAL NOT NULL,
-  severity TEXT DEFAULT 'warning',
-  cooldown_seconds INTEGER DEFAULT 300,
-  notify_webhook INTEGER DEFAULT 0,
-  notify_email INTEGER DEFAULT 0,
-  notify_telegram INTEGER DEFAULT 0,
-  notify_browser INTEGER DEFAULT 1,
-  enabled INTEGER DEFAULT 1,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS event_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id INTEGER,
-  event_type TEXT NOT NULL,
-  message TEXT NOT NULL,
-  source TEXT DEFAULT 'system',
-  severity TEXT DEFAULT 'info',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_el_time ON event_log(created_at);
-
-CREATE TABLE IF NOT EXISTS snmp_profiles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  snmp_version TEXT DEFAULT '2c',
-  snmp_community TEXT,
-  snmp_port INTEGER DEFAULT 161,
-  snmp_user TEXT,
-  snmp_auth_protocol TEXT,
-  snmp_auth_pass TEXT,
-  snmp_priv_protocol TEXT,
-  snmp_priv_pass TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-INSERT OR IGNORE INTO snmp_profiles (id,name,snmp_version,snmp_community,snmp_port) VALUES (1,'Default v2c','2c','public',161);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT
-);
-INSERT OR IGNORE INTO settings (key,value) VALUES ('snmp_interval_ms','5000');
-INSERT OR IGNORE INTO settings (key,value) VALUES ('ping_interval_ms','5000');
-
-CREATE TABLE IF NOT EXISTS discovery_jobs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  subnet TEXT NOT NULL,
-  status TEXT DEFAULT 'pending',
-  total_ips INTEGER DEFAULT 0,
-  found_devices INTEGER DEFAULT 0,
-  started_at DATETIME,
-  completed_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS link_rate_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id INTEGER NOT NULL,
-  interface_name TEXT NOT NULL,
-  rx_bps REAL,
-  tx_bps REAL,
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_lrh_dev_if_time ON link_rate_history(device_id, interface_name, timestamp);
-CREATE INDEX IF NOT EXISTS idx_lrh_time ON link_rate_history(timestamp);
-`);
-
-// SFP/DOM optical columns on interfaces (migrates existing DBs).
-// Stores per-interface transceiver diagnostics polled via ENTITY-SENSOR-MIB /
-// CISCO-ENTITY-SENSOR-MIB. NULL = copper/non-SFP or not yet polled.
-try {
-  const cols = db.prepare(`PRAGMA table_info(interfaces)`).all().map((c) => c.name);
-  const addCol = (name, def) => {
-    if (!cols.includes(name)) db.exec(`ALTER TABLE interfaces ADD COLUMN ${name} ${def}`);
-  };
-  addCol('sfp_rx_dbm', 'REAL');
-  addCol('sfp_tx_dbm', 'REAL');
-  addCol('sfp_temp_c', 'REAL');
-  addCol('sfp_voltage_v', 'REAL');
-  addCol('sfp_bias_ma', 'REAL');
-} catch {}
-
-db.getSetting = function (key, fallback) {
-  try {
-    const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
-    if (!row || row.value === null || row.value === undefined || row.value === '') return fallback;
-    const n = parseInt(row.value);
-    return isNaN(n) ? fallback : n;
-  } catch (e) { return fallback; }
+// ── core primitives ──
+db.id = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
 };
 
-// Raw string getter (no numeric coercion) for URLs, tokens, hosts.
-db.getSettingRaw = function (key, fallback) {
+db.nextId = async (colName) => {
+  const r = await mdb.collection('counters').findOneAndUpdate(
+    { _id: colName },
+    { $inc: { seq: 1 } },
+    { upsert: true, includeResultMetadata: false, returnDocument: 'after' }
+  );
+  return r.seq;
+};
+
+db.find = (col, filter, opts) => mdb.collection(col).find(filter || {}, opts || {}).toArray();
+db.findOne = (col, filter, opts) => mdb.collection(col).findOne(filter || {}, opts || {});
+db.updateOne = (col, filter, update, opts) => mdb.collection(col).updateOne(filter || {}, update, opts || {});
+db.updateMany = (col, filter, update, opts) => mdb.collection(col).updateMany(filter || {}, update, opts || {});
+db.deleteOne = (col, filter) => mdb.collection(col).deleteOne(filter || {});
+db.deleteMany = (col, filter) => mdb.collection(col).deleteMany(filter || {});
+
+// Insert a doc, stamping a numeric id + created_at. Returns the id.
+db.ins = async (colName, doc) => {
+  const d = { ...doc };
+  if (d.id === undefined || d.id === null) d.id = await db.nextId(colName);
+  if (d.created_at === undefined || d.created_at === null) d.created_at = new Date();
+  await mdb.collection(colName).insertOne(d);
+  return d.id;
+};
+
+// Bulk insert with sequential ids (metric_history / link_rate_history).
+async function bulkSeq(colName, rows, mapRow) {
+  if (!rows || !rows.length) return;
+  const r = await mdb.collection('counters').findOneAndUpdate(
+    { _id: colName },
+    { $inc: { seq: rows.length } },
+    { upsert: true, includeResultMetadata: false, returnDocument: 'after' }
+  );
+  let start = r.seq - rows.length + 1;
+  const ts = new Date();
+  await mdb.collection(colName).insertMany(rows.map((row) => mapRow(row, start++, ts)));
+}
+
+// ── settings ──
+db.getSettingRaw = async (key, fallback) => {
   try {
-    const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    const row = await db.findOne('settings', { _id: key });
     if (!row || row.value === null || row.value === undefined || String(row.value) === '') return fallback;
     return String(row.value);
-  } catch (e) { return fallback; }
+  } catch { return fallback; }
+};
+db.getSetting = async (key, fallback) => {
+  const v = await db.getSettingRaw(key, null);
+  if (v === null || v === undefined) return fallback;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? fallback : n;
+};
+db.setSetting = (key, value) => db.updateOne('settings', { _id: key }, { $set: { value: String(value) } }, { upsert: true });
+
+// ── events ──
+db.addEvent = (deviceId, type, message, source, severity) =>
+  db.ins('event_log', {
+    device_id: deviceId === null || deviceId === undefined ? null : db.id(deviceId),
+    event_type: type || 'system',
+    message: String(message),
+    source: source || 'system',
+    severity: severity || 'info'
+  });
+
+// ── devices ──
+db.allDevices = () => db.find('devices', {}, { sort: { name: 1 } });
+db.devById = async (id) => { const n = db.id(id); return n === null ? null : db.findOne('devices', { id: n }); };
+db.devByIp = (ip) => db.findOne('devices', { ip_address: ip });
+db.setDevStatus = (id, status) => db.updateOne('devices', { id }, { $set: { status, last_seen: new Date() } });
+
+// ── metrics (metric_history / last_metrics) ──
+db.addMetric = (deviceId, type, value, ifName) =>
+  db.ins('metric_history', { device_id: db.id(deviceId), metric_type: type, interface_name: ifName || null, value });
+
+db.addMetricsBulk = (rows) => bulkSeq('metric_history', rows, (r, id, ts) => ({
+  id, device_id: r.device_id, metric_type: r.metric_type, interface_name: r.interface_name || null, value: r.value, timestamp: ts
+}));
+
+db.upsertLastM = async (deviceId, type, value) => {
+  const exists = await db.findOne('last_metrics', { device_id: db.id(deviceId), metric_type: type }, { projection: { _id: 1 } });
+  const setId = exists ? null : await db.nextId('last_metrics');
+  await db.updateOne(
+    'last_metrics',
+    { device_id: db.id(deviceId), metric_type: type },
+    { $set: { value, timestamp: new Date() }, ...(setId !== null ? { $setOnInsert: { id: setId } } : {}) },
+    { upsert: true }
+  );
 };
 
-db.setSetting = function (key, value) {
-  db.prepare(`INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value));
+db.lastMetricsByDev = (deviceId) => db.find('last_metrics', { device_id: db.id(deviceId), metric_type: { $in: ['cpu', 'memory', 'disk', 'uptime'] } });
+db.allLastMetrics = () => db.find('last_metrics', { metric_type: { $in: ['cpu', 'memory', 'disk', 'uptime'] } });
+db.metricHistory = async (deviceId, opts) => {
+  const o = opts || {};
+  const filter = { device_id: db.id(deviceId) };
+  if (o.metric_type) filter.metric_type = o.metric_type;
+  if (o.interface_name) filter.interface_name = o.interface_name;
+  if (o.hours) filter.timestamp = { $gte: new Date(Date.now() - o.hours * 3600000) };
+  return db.find('metric_history', filter, { sort: { timestamp: -1 }, limit: Math.min(Math.max(o.limit || 500, 1), 2000) });
 };
+
+// ── interfaces ──
+db.upsertInterface = async (deviceId, ifIndex, set) => {
+  const exists = await db.findOne('interfaces', { device_id: db.id(deviceId), if_index: ifIndex }, { projection: { _id: 1 } });
+  const setId = exists ? null : await db.nextId('interfaces');
+  await db.updateOne(
+    'interfaces',
+    { device_id: db.id(deviceId), if_index: ifIndex },
+    { $set: { ...set, last_updated: new Date() }, ...(setId !== null ? { $setOnInsert: { id: setId } } : {}) },
+    { upsert: true }
+  );
+};
+db.ifByDevIndex = (deviceId, ifIndex) => db.findOne('interfaces', { device_id: db.id(deviceId), if_index: ifIndex });
+db.ifByName = (deviceId, ifName) => db.findOne('interfaces', { device_id: db.id(deviceId), if_name: ifName });
+db.interfacesByDev = (deviceId) => db.find('interfaces', { device_id: db.id(deviceId), if_name: { $ne: null }, if_name: { $ne: '' } }, { sort: { if_index: 1 } });
+
+// ── link_rate_history ──
+db.addRateBulk = (rows) => bulkSeq('link_rate_history', rows, (r, id, ts) => ({
+  id, device_id: r.deviceId, interface_name: r.ifName, rx_bps: r.rxBps, tx_bps: r.txBps, timestamp: ts
+}));
+db.persistedRate = (deviceId, ifName) => db.findOne('link_rate_history', { device_id: db.id(deviceId), interface_name: ifName }, { sort: { timestamp: -1 } });
+db.rateHistory = (deviceId, ifName, limit) => db.find('link_rate_history', { device_id: db.id(deviceId), interface_name: ifName }, { sort: { timestamp: -1 }, limit });
+db.pruneRates = (olderThan) => db.deleteMany('link_rate_history', { timestamp: { $lt: olderThan } });
+
+// ── alerts / alert_rules ──
+db.addAlert = (deviceId, severity, message) => db.ins('alerts', { device_id: deviceId === null || deviceId === undefined ? null : db.id(deviceId), severity, message, status: 'active' });
+db.ackAlert = (id, userId) => db.updateOne('alerts', { id }, { $set: { status: 'acknowledged', acknowledged_by: userId, acknowledged_at: new Date() } });
+db.resolveAlert = (id) => db.updateOne('alerts', { id }, { $set: { status: 'resolved', resolved_at: new Date() } });
+db.alertById = (id) => db.findOne('alerts', { id });
+db.alertByNameSince = (deviceId, name, since) => db.findOne('alerts', {
+  device_id: db.id(deviceId), status: 'active', message: { $regex: escapeRegExp('' + name) }, created_at: { $gt: since }
+}, { projection: { id: 1 } });
+db.allRules = (enabledOnly) => db.find('alert_rules', enabledOnly ? { enabled: 1 } : {}, { sort: { name: 1 } });
+
+// ── map entities ──
+db.mapById = async (id) => { const n = db.id(id); return n === null ? null : db.findOne('maps', { id: n }); };
+db.mapNodesByMap = (mapId) => db.find('map_nodes', { map_id: db.id(mapId) });
+db.mapLinksByMap = (mapId) => db.find('map_links', { map_id: db.id(mapId) });
+db.mapNodesAll = () => db.find('map_nodes', { device_id: { $ne: null } });
+db.mapLinksAll = () => db.find('map_links', {});
+
+function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+db.connect = connect;
 
 module.exports = db;

@@ -5,7 +5,7 @@ let server = null;
 
 function start(io) {
   server = dgram.createSocket('udp4');
-  server.on('message', (msg, rinfo) => {
+  server.on('message', async (msg, rinfo) => {
     try {
       const str = msg.toString();
       const m = str.match(/^<(\d+)>\S+\s+\S+\s+(\S+):\s*(.*)/);
@@ -13,8 +13,8 @@ function start(io) {
       const host = m ? m[2] : rinfo.address;
       const message = m ? m[3] : str;
       const sev = pri % 8 <= 2 ? 'critical' : pri % 8 <= 4 ? 'warning' : 'info';
-      const dev = db.prepare('SELECT id FROM devices WHERE ip_address=?').get(rinfo.address);
-      db.prepare(`INSERT INTO event_log (device_id,event_type,message,source,severity) VALUES (?,?,?,?)`).run(dev?.id||null, 'syslog', `[${host}] ${message}`, 'syslog', sev);
+      const dev = await db.devByIp(rinfo.address);
+      await db.addEvent(dev?.id || null, 'syslog', `[${host}] ${message}`, 'syslog', sev);
       if (io) io.emit('syslog:message', { hostname: host, message, severity: sev, sourceIp: rinfo.address, timestamp: new Date().toISOString() });
     } catch {}
   });

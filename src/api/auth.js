@@ -3,13 +3,15 @@ const bcrypt = require('bcryptjs');
 const db = require('../database/db');
 const config = require('../config/config');
 
-function initAdmin() {
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(config.auth.defaultUser);
-  if (!existing) {
-    const hash = bcrypt.hashSync(config.auth.defaultPass, 10);
-    db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(config.auth.defaultUser, hash, 'admin');
-    console.log(`[Auth] Created admin user: ${config.auth.defaultUser}`);
-  }
+async function initAdmin() {
+  try {
+    const existing = await db.findOne('users', { username: config.auth.defaultUser });
+    if (!existing) {
+      const hash = await bcrypt.hash(config.auth.defaultPass, 10);
+      await db.ins('users', { username: config.auth.defaultUser, password_hash: hash, role: 'admin' });
+      console.log(`[Auth] Created admin user: ${config.auth.defaultUser}`);
+    }
+  } catch (e) { console.error('[Auth] initAdmin error:', e.message); }
 }
 
 function signToken(user) {

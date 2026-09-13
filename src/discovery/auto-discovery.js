@@ -53,7 +53,7 @@ function identifyType(desc) {
 
 async function scanSubnet(subnet, io) {
   const hosts = expandCIDR(subnet);
-  const jobId = db.prepare(`INSERT INTO discovery_jobs (subnet,status,total_ips,started_at) VALUES (?,?,?,datetime('now'))`).run(subnet,'running',hosts.length);
+  const jobId = await db.ins('discovery_jobs', { subnet, status: 'running', total_ips: hosts.length, started_at: new Date() });
   const found = [];
 
   for (let i = 0; i < hosts.length; i += 50) {
@@ -76,15 +76,15 @@ async function scanSubnet(subnet, io) {
     for (const r of results) {
       if (r.status !== 'fulfilled' || !r.value) continue;
       const dev = r.value;
-      const exists = db.prepare('SELECT id FROM devices WHERE ip_address=?').get(dev.ip);
+      const exists = await db.devByIp(dev.ip);
       if (exists) continue;
-      const ins = db.prepare(`INSERT INTO devices (name,ip_address,device_type,snmp_community,status) VALUES (?,?,?,?,'up')`).run(dev.name, dev.ip, dev.dtype, 'public');
-      found.push({ id: ins.lastInsertRowid, name: dev.name, ip: dev.ip, deviceType: dev.dtype });
-      if (io) io.emit('discovery:device_found', { id: ins.lastInsertRowid, name: dev.name, ip: dev.ip });
+      const id = await db.ins('devices', { name: dev.name, ip_address: dev.ip, device_type: dev.dtype, snmp_community: 'public', status: 'up' });
+      found.push({ id, name: dev.name, ip: dev.ip, deviceType: dev.dtype });
+      if (io) io.emit('discovery:device_found', { id, name: dev.name, ip: dev.ip });
     }
   }
 
-  db.prepare(`UPDATE discovery_jobs SET status='completed',found_devices=?,completed_at=datetime('now') WHERE id=?`).run(found.length, jobId.lastInsertRowid);
+  await db.updateOne('discovery_jobs', { id: jobId }, { $set: { status: 'completed', found_devices: found.length, completed_at: new Date() } });
   if (io) io.emit('discovery:complete', { subnet, devicesFound: found.length, devices: found });
 }
 

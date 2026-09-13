@@ -6,30 +6,30 @@ const db = require('../database/db');
 let transporter = null;
 
 // DB-stored notification settings override env (set via Settings UI).
-function cfg(key, envVal) {
+async function cfg(key, envVal) {
   try {
-    const v = db.getSettingRaw('notify_' + key, null);
+    const v = await db.getSettingRaw('notify_' + key, null);
     if (v !== null && v !== undefined && String(v) !== '') return v;
   } catch {}
   return envVal;
 }
 
-function init() {
-  const host = cfg('smtp_host', config.alerting.smtpHost);
-  const user = cfg('smtp_user', config.alerting.smtpUser);
+async function init() {
+  const host = await cfg('smtp_host', config.alerting.smtpHost);
+  const user = await cfg('smtp_user', config.alerting.smtpUser);
   if (host && user) {
-    transporter = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: cfg('smtp_pass', config.alerting.smtpPass) } });
+    transporter = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: await cfg('smtp_pass', config.alerting.smtpPass) } });
   }
 }
 
 async function notify(alert, message, channels) {
   const want = (k) => !channels || channels[k] === undefined || !!channels[k];
-  const webhookUrl = want('webhook') && cfg('webhook_url', config.alerting.webhookUrl);
+  const webhookUrl = want('webhook') && await cfg('webhook_url', config.alerting.webhookUrl);
   if (webhookUrl) {
     axios.post(webhookUrl, { text: message, severity: alert.severity, source: 'Web-NMS' }, { timeout: 10000 }).catch(() => {});
   }
-  const tgToken = want('telegram') && cfg('telegram_token', config.alerting.telegramToken);
-  const tgChat = want('telegram') && cfg('telegram_chat_id', config.alerting.telegramChatId);
+  const tgToken = want('telegram') && await cfg('telegram_token', config.alerting.telegramToken);
+  const tgChat = want('telegram') && await cfg('telegram_chat_id', config.alerting.telegramChatId);
   if (tgToken && tgChat) {
     axios.post(`https://api.telegram.org/bot${tgToken}/sendMessage`, { chat_id: tgChat, text: message }, { timeout: 10000 }).catch(() => {});
   }
@@ -41,11 +41,11 @@ async function notify(alert, message, channels) {
     return;
   }
   try {
-    const host = cfg('smtp_host', config.alerting.smtpHost);
-    const user = cfg('smtp_user', config.alerting.smtpUser);
-    const emailTo = cfg('alert_email_to', config.alerting.emailTo);
+    const host = await cfg('smtp_host', config.alerting.smtpHost);
+    const user = await cfg('smtp_user', config.alerting.smtpUser);
+    const emailTo = await cfg('alert_email_to', config.alerting.emailTo);
     if (host && user && emailTo) {
-      const t = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: cfg('smtp_pass', config.alerting.smtpPass) } });
+      const t = nodemailer.createTransport({ host, port: config.alerting.smtpPort, secure: false, auth: { user, pass: await cfg('smtp_pass', config.alerting.smtpPass) } });
       t.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});
     } else if (transporter && config.alerting.emailTo) {
       transporter.sendMail({ from: config.alerting.emailFrom || 'webnms@localhost', to: config.alerting.emailTo, subject: `[Web-NMS] ${alert.severity}`, text: message }).catch(() => {});

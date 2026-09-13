@@ -3,14 +3,12 @@ const db = require('../database/db');
 // Compute live Rx/Tx rates (bps) for a device interface from metric_history.
 // Uses the last two samples of interface_rx / interface_tx for (device_id, interface_name).
 // Returns { rxBps, txBps, rxOctets, txOctets, updatedAt } with nulls when unavailable.
-function getInterfaceStats(deviceId, ifName) {
+async function getInterfaceStats(deviceId, ifName) {
   if (!deviceId || !ifName) return { rxBps: null, txBps: null, rxOctets: null, txOctets: null, updatedAt: null };
   try {
-    const q = db.prepare(
-      `SELECT value, timestamp FROM metric_history WHERE device_id=? AND metric_type=? AND interface_name=? ORDER BY timestamp DESC LIMIT 2`
-    );
-    const rx = q.all(deviceId, 'interface_rx', ifName);
-    const tx = q.all(deviceId, 'interface_tx', ifName);
+    deviceId = db.id(deviceId);
+    const rx = await db.find('metric_history', { device_id: deviceId, metric_type: 'interface_rx', interface_name: ifName }, { sort: { timestamp: -1 }, limit: 2 });
+    const tx = await db.find('metric_history', { device_id: deviceId, metric_type: 'interface_tx', interface_name: ifName }, { sort: { timestamp: -1 }, limit: 2 });
 
     const rate = (rows) => {
       if (!rows || rows.length < 2) return { bps: null, octets: rows && rows.length ? rows[0].value : null, ts: rows && rows.length ? rows[0].timestamp : null };
@@ -32,7 +30,7 @@ function getInterfaceStats(deviceId, ifName) {
     let txOctets = t.octets;
     if (rxOctets == null || txOctets == null) {
       try {
-        const row = db.prepare('SELECT if_in_octets, if_out_octets FROM interfaces WHERE device_id=? AND if_name=?').get(deviceId, ifName);
+        const row = await db.ifByName(deviceId, ifName);
         if (row) {
           if (rxOctets == null) rxOctets = row.if_in_octets;
           if (txOctets == null) txOctets = row.if_out_octets;
@@ -54,7 +52,7 @@ function getInterfaceStats(deviceId, ifName) {
 // Enrich a map_links row with live stats.
 // Prefers the source interface; falls back to the target side (covers links
 // to static objects like pint_core -> a where only one end is a device).
-function enrichLink(link, nodeById) {
+async function enrichLink(link, nodeById) {
   const out = Object.assign({}, link);
   try {
     const src = nodeById ? nodeById[link.source_node_id] : null;
@@ -84,15 +82,15 @@ function enrichLink(link, nodeById) {
         side = 'target';
       }
     }
-    const st = getPersistedStats(deviceId, ifName) || getInterfaceStats(deviceId, ifName);
-    const srcSt = sideOperAdmin(nodeById, link.source_node_id, link.source_interface);
-    const dstSt = sideOperAdmin(nodeById, link.target_node_id, link.target_interface);
+    const st = (await getPersistedStats(deviceId, ifName)) || (await getInterfaceStats(deviceId, ifName));
+    const srcSt = await sideOperAdmin(nodeById, link.source_node_id, link.source_interface);
+    const dstSt = await sideOperAdmin(nodeById, link.target_node_id, link.target_interface);
     out.stat_device_id = deviceId;
     out.stat_if_name = ifName;
     out.stat_side = side;
     // Port speed driving link width (stat side; link cap as fallback).
     try {
-      out.stat_speed_bps = getIfSpeed(deviceId, ifName) || link.max_speed_bps || null;
+      out.stat_speed_bps = (await getIfSpeed(deviceId, ifName)) || link.max_speed_bps || null;
     } catch { out.stat_speed_bps = link.max_speed_bps || null; }
     out.rx_bps = st.rxBps;
     out.tx_bps = st.txBps;
@@ -107,7 +105,7 @@ function enrichLink(link, nodeById) {
     // Primary fields follow the stat side; per-end fields cover
     // device-to-device fiber where both ends have transceivers.
     try {
-      const sfp = getSfpStats(deviceId, ifName);
+      const sfp = await getSfpStats(deviceId, ifName);
       out.sfp_rx_dbm = sfp.rxDbm;
       out.sfp_tx_dbm = sfp.txDbm;
       out.sfp_temp_c = sfp.tempC;
@@ -116,9 +114,9 @@ function enrichLink(link, nodeById) {
       const srcNode = nodeById ? nodeById[link.source_node_id] : null;
       const dstNode = nodeById ? nodeById[link.target_node_id] : null;
       const srcSfp = srcNode && srcNode.device_id && link.source_interface
-        ? getSfpStats(srcNode.device_id, link.source_interface) : null;
+        ? await getSfpStats(srcNode.device_id, link.source_interface) : null;
       const dstSfp = dstNode && dstNode.device_id && link.target_interface
-        ? getSfpStats(dstNode.device_id, link.target_interface) : null;
+        ? await getSfpStats(dstNode.device_id, link.target_interface) : null;
       out.src_sfp_rx_dbm = srcSfp ? srcSfp.rxDbm : null;
       out.src_sfp_tx_dbm = srcSfp ? srcSfp.txDbm : null;
       out.dst_sfp_rx_dbm = dstSfp ? dstSfp.rxDbm : null;
@@ -142,10 +140,10 @@ function enrichLink(link, nodeById) {
 }
 
 // IfSpeed of one interface; 2^32-1 is the SNMP "unknown" sentinel.
-function getIfSpeed(deviceId, ifName) {
+async function getIfSpeed(deviceId, ifName) {
   if (!deviceId || !ifName) return null;
   try {
-    const r = db.prepare('SELECT if_speed FROM interfaces WHERE device_id=? AND if_name=?').get(deviceId, ifName);
+    const r = await db.ifByName(db.id(deviceId), ifName);
     const s = r ? Number(r.if_speed) : NaN;
     if (!isFinite(s) || s <= 0 || s >= 4294967295) return null;
     return s;
@@ -156,13 +154,11 @@ function getIfSpeed(deviceId, ifName) {
 
 // SFP/DOM optical readings for one interface from the interfaces table.
 // Returns nulls when the port is copper or not yet polled.
-function getSfpStats(deviceId, ifName) {
+async function getSfpStats(deviceId, ifName) {
   const empty = { rxDbm: null, txDbm: null, tempC: null, voltageV: null, biasMa: null };
   if (!deviceId || !ifName) return empty;
   try {
-    const r = db.prepare(
-      'SELECT sfp_rx_dbm, sfp_tx_dbm, sfp_temp_c, sfp_voltage_v, sfp_bias_ma FROM interfaces WHERE device_id=? AND if_name=?'
-    ).get(deviceId, ifName);
+    const r = await db.ifByName(db.id(deviceId), ifName);
     if (!r) return empty;
     const num = (v) => (v === null || v === undefined || !isFinite(Number(v)) ? null : Number(v));
     return { rxDbm: num(r.sfp_rx_dbm), txDbm: num(r.sfp_tx_dbm), tempC: num(r.sfp_temp_c), voltageV: num(r.sfp_voltage_v), biasMa: num(r.sfp_bias_ma) };
@@ -177,11 +173,11 @@ function isFiberIfName(ifName) {
 }
 
 // Oper/admin status of one link end from the interfaces table.
-function sideOperAdmin(nodeById, nodeId, ifName) {
+async function sideOperAdmin(nodeById, nodeId, ifName) {
   try {
     const n = nodeById ? nodeById[nodeId] : null;
     if (!n || !n.device_id || !ifName) return { oper: null, admin: null };
-    const r = db.prepare('SELECT if_oper_status, if_admin_status FROM interfaces WHERE device_id=? AND if_name=?').get(n.device_id, ifName);
+    const r = await db.ifByName(db.id(n.device_id), ifName);
     return { oper: r ? r.if_oper_status : null, admin: r ? r.if_admin_status : null };
   } catch {
     return { oper: null, admin: null };
@@ -190,20 +186,18 @@ function sideOperAdmin(nodeById, nodeId, ifName) {
 
 module.exports = { getInterfaceStats, getPersistedStats, getBoundInterfaces, getSfpStats, isFiberIfName, recordInterfaceRates, pruneLinkHistory, enrichLink };
 
-// Latest server-computed rate for an interface from on-disk link_rate_history.
+// Latest server-computed rate for an interface from link_rate_history.
 // This is the same series the hover graph draws and the same number the live
 // label shows, so label and graph always agree.
-function getPersistedStats(deviceId, ifName) {
+async function getPersistedStats(deviceId, ifName) {
   if (!deviceId || !ifName) return null;
   try {
-    const row = db.prepare(
-      `SELECT rx_bps, tx_bps, timestamp FROM link_rate_history WHERE device_id=? AND interface_name=? ORDER BY timestamp DESC LIMIT 1`
-    ).get(deviceId, ifName);
+    const row = await db.persistedRate(db.id(deviceId), ifName);
     if (!row) return null;
     let rxOctets = null;
     let txOctets = null;
     try {
-      const cur = db.prepare('SELECT if_in_octets, if_out_octets FROM interfaces WHERE device_id=? AND if_name=?').get(deviceId, ifName);
+      const cur = await db.ifByName(db.id(deviceId), ifName);
       if (cur) { rxOctets = cur.if_in_octets; txOctets = cur.if_out_octets; }
     } catch {}
     return { rxBps: row.rx_bps, txBps: row.tx_bps, rxOctets, txOctets, updatedAt: row.timestamp };
@@ -214,13 +208,13 @@ function getPersistedStats(deviceId, ifName) {
 
 // Set of 'deviceId|ifName' for every interface bound to a map link.
 // Only these interfaces get per-cycle rate rows persisted.
-function getBoundInterfaces() {
+async function getBoundInterfaces() {
   const set = new Set();
   try {
-    const nodes = db.prepare('SELECT id, device_id FROM map_nodes WHERE device_id IS NOT NULL').all();
+    const nodes = await db.mapNodesAll();
     const devByNode = {};
     nodes.forEach((n) => { devByNode[n.id] = n.device_id; });
-    const links = db.prepare('SELECT source_node_id, target_node_id, source_interface, target_interface FROM map_links').all();
+    const links = await db.mapLinksAll();
     links.forEach((l) => {
       const sd = devByNode[l.source_node_id];
       const td = devByNode[l.target_node_id];
@@ -241,11 +235,10 @@ const MAX_CARRY = 3; // carry forward for up to 3 consecutive misses
 // Compute per-cycle rates for a device's polled interfaces, persist rows for
 // link-bound interfaces, and return [{deviceId,ifName,rxBps,txBps,rxOctets,txOctets}].
 // MUST be called BEFORE saveInterfaces() overwrites the interfaces table.
-function recordInterfaceRates(deviceId, interfaces, boundSet) {
+async function recordInterfaceRates(deviceId, interfaces, boundSet) {
   const out = [];
   const now = Date.now();
-  let ins = null;
-  try { ins = db.prepare(`INSERT INTO link_rate_history (device_id, interface_name, rx_bps, tx_bps) VALUES (?,?,?,?)`); } catch { return out; }
+  const rows = [];
   const seen = new Set();
   for (const i of interfaces || []) {
     try {
@@ -285,13 +278,13 @@ function recordInterfaceRates(deviceId, interfaces, boundSet) {
             if ((overSpeed || zeroDip) && lrMiss < MAX_CARRY) {
               const nMiss = lrMiss + 1;
               _lastRate.set(key, { rxBps: prevRate.rxBps, txBps: prevRate.txBps, t: now, misses: nMiss });
-              try { ins.run(deviceId, i.if_name, prevRate.rxBps, prevRate.txBps); } catch {}
+              rows.push({ deviceId, ifName: i.if_name, rxBps: prevRate.rxBps, txBps: prevRate.txBps });
               rxBps = prevRate.rxBps; txBps = prevRate.txBps;
             } else {
               // Sustained anomaly (or confirmed idle): store truth — zeros
               // for impossible speeds, computed values otherwise.
               const fRx = overSpeed ? 0 : cRx, fTx = overSpeed ? 0 : cTx;
-              try { ins.run(deviceId, i.if_name, fRx, fTx); } catch {}
+              rows.push({ deviceId, ifName: i.if_name, rxBps: fRx, txBps: fTx });
               _lastRate.set(key, { rxBps: fRx, txBps: fTx, t: now, misses: 0 });
               rxBps = fRx; txBps = fTx;
             }
@@ -307,7 +300,7 @@ function recordInterfaceRates(deviceId, interfaces, boundSet) {
   // flat instead of dropping to zero or leaving gaps). After that, an
   // explicit zero row is written so the graph draws a zero line instead of
   // a gap — continuous until the device stops being polled (down/backoff).
-  if (boundSet && ins) {
+  if (boundSet) {
     for (const key of boundSet) {
       if (seen.has(key)) continue;
       if (!key.startsWith(deviceId + '|')) continue;
@@ -319,16 +312,17 @@ function recordInterfaceRates(deviceId, interfaces, boundSet) {
       const useZero = lr.misses > MAX_CARRY;
       const rxBps = useZero ? 0 : lr.rxBps;
       const txBps = useZero ? 0 : lr.txBps;
-      try { ins.run(deviceId, ifName, rxBps, txBps); } catch {}
+      rows.push({ deviceId, ifName, rxBps, txBps });
       // No SFP keys: a carried cycle has no fresh DOM data, and explicit
       // nulls would wipe the edge label's SFP line in the frontend.
       out.push({ deviceId, ifName, rxBps, txBps, rxOctets: null, txOctets: null });
     }
   }
+  try { await db.addRateBulk(rows); } catch {}
   return out;
 }
 
 // Bound table growth: keep ~6h of per-cycle rows.
-function pruneLinkHistory() {
-  try { db.prepare(`DELETE FROM link_rate_history WHERE timestamp < datetime('now','-6 hours')`).run(); } catch {}
+async function pruneLinkHistory() {
+  try { await db.pruneRates(new Date(Date.now() - 6 * 3600000)); } catch {}
 }

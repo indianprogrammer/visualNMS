@@ -17,33 +17,45 @@ const trapListener = require('./src/traps/trap-listener');
 
 const app = express();
 const server = http.createServer(app);
-const io = wsServer.init(server);
 
-pollerEngine.setIO(io);
-alertEngine.init();
+async function main() {
+  try {
+    await db.connect();
+  } catch (e) {
+    console.error('[Mongo] Failed to connect:', e.message);
+    process.exit(1);
+  }
 
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(rateLimit({ windowMs: 60000, max: 300 }));
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api', routes);
+  const io = wsServer.init(server);
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+  pollerEngine.setIO(io);
+  await alertEngine.init();
 
-process.on('SIGINT', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
-process.on('SIGTERM', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+  app.use(cors());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(rateLimit({ windowMs: 60000, max: 300 }));
+  app.use(express.static(path.join(__dirname, 'public')));
+  app.use('/api', routes);
 
-server.listen(config.server.port, config.server.host, () => {
-  console.log(`\n  ╔══════════════════════════════════════╗`);
-  console.log(`  ║   Web-NMS Network Management System  ║`);
-  console.log(`  ║   http://localhost:${config.server.port}              ║`);
-  console.log(`  ╚══════════════════════════════════════╝\n`);
-  auth.initAdmin();
-  pollerEngine.start();
-  try { syslogListener.start(io); } catch {}
-  try { trapListener.start(io); } catch {}
-  db.prepare(`INSERT INTO event_log (event_type,message,source,severity) VALUES ('system','Server started','system','info')`).run();
-});
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+
+  process.on('SIGINT', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
+  process.on('SIGTERM', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
+
+  server.listen(config.server.port, config.server.host, async () => {
+    console.log(`\n  ╔══════════════════════════════════════╗`);
+    console.log(`  ║   Web-NMS Network Management System  ║`);
+    console.log(`  ║   http://localhost:${config.server.port}              ║`);
+    console.log(`  ╚══════════════════════════════════════╝\n`);
+    await auth.initAdmin();
+    pollerEngine.start().catch((e) => console.error('[Poller] start error:', e.message));
+    try { syslogListener.start(io); } catch {}
+    try { trapListener.start(io); } catch {}
+    await db.addEvent(null, 'system', 'Server started', 'system', 'info');
+  });
+}
+
+main();

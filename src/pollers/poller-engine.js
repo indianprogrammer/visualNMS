@@ -29,16 +29,12 @@ function getCycleStats() { return JSON.parse(JSON.stringify(loopStats)); }
 
 function setIO(sio) { io = sio; }
 
-const insertMetric = db.prepare(`INSERT INTO metric_history (device_id,metric_type,value) VALUES (?,?,?)`);
-const updateDevice = db.prepare(`UPDATE devices SET status=?, last_seen=datetime('now') WHERE id=?`);
-const insertLastPing = db.prepare(`INSERT INTO last_metrics (device_id,metric_type,value) VALUES (?,?,?) ON CONFLICT(device_id,metric_type) DO UPDATE SET value=excluded.value, timestamp=datetime('now')`);
-
 async function pingCycles() {
   if (pingCycleInProgress) { loopStats.ping.skips++; return []; }
   pingCycleInProgress = true;
   const t0 = Date.now();
   try {
-    const devices = db.prepare('SELECT * FROM devices').all();
+    const devices = await db.allDevices();
     const results = [];
     const batchSize = 400;
 
@@ -47,10 +43,10 @@ async function pingCycles() {
       const batchResults = await Promise.allSettled(batch.map(async (device) => {
         const pingResult = await pingPoller.pingHost(device.ip_address, config.poller.pingTimeoutMs);
         const status = pingResult.reachable ? 'up' : 'down';
-        updateDevice.run(status, device.id);
+        await db.setDevStatus(device.id, status);
         if (pingResult.reachable) {
-          insertMetric.run(device.id, 'ping', pingResult.latencyMs);
-          insertLastPing.run(device.id, 'ping', pingResult.latencyMs);
+          await db.addMetric(device.id, 'ping', pingResult.latencyMs);
+          await db.upsertLastM(device.id, 'ping', pingResult.latencyMs);
         }
         return { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: pingResult, snmp: null };
       }));
@@ -59,7 +55,7 @@ async function pingCycles() {
     }
 
     if (io) io.emit('poll:results', results);
-    try { checkAlertRules(results); } catch (e) { console.error('[Poller] Alert eval error:', e.message); }
+    try { await checkAlertRules(results); } catch (e) { console.error('[Poller] Alert eval error:', e.message); }
     loopStats.ping.runs++;
     loopStats.ping.lastMs = Date.now() - t0;
     return results;
@@ -81,10 +77,10 @@ async function fullPoll() {
   const t0 = Date.now();
   try {
     snmpCycleCount++;
-    const devices = db.prepare('SELECT * FROM devices').all();
+    const devices = await db.allDevices();
     const results = [];
     const batchSize = 200;
-    const boundSet = linkStats.getBoundInterfaces();
+    const boundSet = await linkStats.getBoundInterfaces();
     const cycleStats = [];
 
     const failures = [];
@@ -100,11 +96,11 @@ async function fullPoll() {
               // NOTE: no recordInterfaceRates here — the light cycle owns rate
               // math. Two writers racing on the same counters produced 0-dips
               // and multi-Gbps spikes on 1G links.
-              if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
-              if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
-              if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
-              if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
-              if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
+              if (snmpResult.interfaces.length) await snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+              if (snmpResult.cpuLoad !== null) { await db.addMetric(device.id, 'cpu', snmpResult.cpuLoad); await db.upsertLastM(device.id, 'cpu', snmpResult.cpuLoad); }
+              if (snmpResult.memoryPct !== null) { await db.addMetric(device.id, 'memory', snmpResult.memoryPct); await db.upsertLastM(device.id, 'memory', snmpResult.memoryPct); }
+              if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { await db.addMetric(device.id, 'disk', snmpResult.diskPct); await db.upsertLastM(device.id, 'disk', snmpResult.diskPct); }
+              if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) await db.upsertLastM(device.id, 'uptime', snmpResult.sysUpTime);
             }
           } catch {}
           const hasData = snmpResult && !snmpResult.error && (snmpResult.sysDescr || snmpResult.interfaces.length || snmpResult.cpuLoad !== null || snmpResult.memoryPct !== null || (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined));
@@ -128,7 +124,7 @@ async function fullPoll() {
       if (failures.length) console.warn(`[Poller] SNMP failed for ${failures.length} device(s): ${failures.slice(0, 5).join('; ')}${failures.length > 5 ? ` (+${failures.length - 5} more)` : ''}`);
       else console.log('[Poller] SNMP: all devices responding');
     }
-    checkAlertRules(results);
+    await checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
     if (io && cycleStats.length) io.emit('link:stats', cycleStats);
     loopStats.full.runs++;
@@ -143,25 +139,19 @@ async function fullPoll() {
 // Light cycle (every few seconds): CPU/RAM/disk + targeted GETs for the
 // map-bound interfaces only. Dead devices use the same consecutive-failure
 // backoff, re-probed every 12th light cycle.
-// NOTE: light no longer waits out a full poll — the old
-// `|| fullCycleInProgress` guard starved link stats/graphs for the whole
-// (multi-minute) full walk, including right after every server restart.
-// Concurrent full+light SNMP is safe: the light cycle solely owns rate math
-// (single writer — concurrent writers caused 0-dips and phantom spikes) and
-// all DB writes are synchronous/atomic via better-sqlite3.
 async function lightPoll() {
   if (lightCycleInProgress) { loopStats.light.skips++; return []; }
   lightCycleInProgress = true;
   const t0light = Date.now();
   try {
     snmpCycleCount++;
-    const devices = db.prepare('SELECT * FROM devices').all();
-    const boundSet = linkStats.getBoundInterfaces();
+    const devices = await db.allDevices();
+    const boundSet = await linkStats.getBoundInterfaces();
     // ifIndex lookup for bound interfaces (built by full polls / refresh).
     const idxByKey = {};
     try {
-      db.prepare('SELECT device_id, if_index, if_name FROM interfaces').all()
-        .forEach((r) => { if (r.if_name) idxByKey[r.device_id + '|' + r.if_name] = r.if_index; });
+      const rows = await db.find('interfaces', { if_name: { $ne: null } }, { projection: { device_id: 1, if_index: 1, if_name: 1 } });
+      rows.forEach((r) => { if (r.if_name) idxByKey[r.device_id + '|' + r.if_name] = r.if_index; });
     } catch {}
     const results = [];
     const batchSize = 200;
@@ -191,12 +181,13 @@ async function lightPoll() {
               snmpResult.partial = true;
               if (snmpResult && snmpResult.domFullPollNeeded) needFull.add(device.id);
               if (snmpResult && !snmpResult.error) {
-                linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet).forEach((r) => cycleStats.push(r));
-                if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
-                if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
-                if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
-                if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
-                if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
+                const stats = await linkStats.recordInterfaceRates(device.id, snmpResult.interfaces, boundSet);
+                stats.forEach((r) => cycleStats.push(r));
+                if (snmpResult.interfaces.length) await snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+                if (snmpResult.cpuLoad !== null) { await db.addMetric(device.id, 'cpu', snmpResult.cpuLoad); await db.upsertLastM(device.id, 'cpu', snmpResult.cpuLoad); }
+                if (snmpResult.memoryPct !== null) { await db.addMetric(device.id, 'memory', snmpResult.memoryPct); await db.upsertLastM(device.id, 'memory', snmpResult.memoryPct); }
+                if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { await db.addMetric(device.id, 'disk', snmpResult.diskPct); await db.upsertLastM(device.id, 'disk', snmpResult.diskPct); }
+                if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) await db.upsertLastM(device.id, 'uptime', snmpResult.sysUpTime);
               }
             } catch {}
           }
@@ -214,7 +205,7 @@ async function lightPoll() {
       for (const r of batchResults) if (r.status === 'fulfilled') results.push(r.value);
     }
 
-    checkAlertRules(results);
+    await checkAlertRules(results);
     if (io) io.emit('poll:snmp', results);
     if (io && cycleStats.length) io.emit('link:stats', cycleStats);
     // Devices with bound interfaces missing an ifIndex mapping — or with a
@@ -233,9 +224,9 @@ async function lightPoll() {
 
 // Full poll of a single device (context-menu refresh / missing mappings).
 async function fullPollDevice(deviceId) {
-  const device = db.prepare('SELECT * FROM devices WHERE id=?').get(deviceId);
+  const device = await db.devById(deviceId);
   if (!device) return null;
-  const boundSet = linkStats.getBoundInterfaces();
+  const boundSet = await linkStats.getBoundInterfaces();
   let snmpResult = null;
   let devStats = [];
   if (device.snmp_community || device.snmp_version === '3') {
@@ -243,11 +234,11 @@ async function fullPollDevice(deviceId) {
       snmpResult = await snmpPoller.pollDevice(device);
       if (snmpResult && !snmpResult.error) {
         // No recordInterfaceRates: light cycle owns rate math (single writer).
-        if (snmpResult.interfaces.length) snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
-        if (snmpResult.cpuLoad !== null) { insertMetric.run(device.id, 'cpu', snmpResult.cpuLoad); insertLastPing.run(device.id, 'cpu', snmpResult.cpuLoad); }
-        if (snmpResult.memoryPct !== null) { insertMetric.run(device.id, 'memory', snmpResult.memoryPct); insertLastPing.run(device.id, 'memory', snmpResult.memoryPct); }
-        if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { insertMetric.run(device.id, 'disk', snmpResult.diskPct); insertLastPing.run(device.id, 'disk', snmpResult.diskPct); }
-        if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) insertLastPing.run(device.id, 'uptime', snmpResult.sysUpTime);
+        if (snmpResult.interfaces.length) await snmpPoller.saveInterfaces(device.id, snmpResult.interfaces);
+        if (snmpResult.cpuLoad !== null) { await db.addMetric(device.id, 'cpu', snmpResult.cpuLoad); await db.upsertLastM(device.id, 'cpu', snmpResult.cpuLoad); }
+        if (snmpResult.memoryPct !== null) { await db.addMetric(device.id, 'memory', snmpResult.memoryPct); await db.upsertLastM(device.id, 'memory', snmpResult.memoryPct); }
+        if (snmpResult.diskPct !== null && snmpResult.diskPct !== undefined) { await db.addMetric(device.id, 'disk', snmpResult.diskPct); await db.upsertLastM(device.id, 'disk', snmpResult.diskPct); }
+        if (snmpResult.sysUpTime !== null && snmpResult.sysUpTime !== undefined) await db.upsertLastM(device.id, 'uptime', snmpResult.sysUpTime);
         snmpFailCount[device.id] = 0;
       } else {
         snmpFailCount[device.id] = (snmpFailCount[device.id] || 0) + 1;
@@ -255,19 +246,14 @@ async function fullPollDevice(deviceId) {
     } catch {}
   }
   const result = { deviceId: device.id, deviceName: device.name, ip: device.ip_address, ping: null, snmp: snmpResult };
-  checkAlertRules([result]);
+  await checkAlertRules([result]);
   if (io) io.emit('poll:snmp', [result]);
   if (io && devStats.length) io.emit('link:stats', devStats);
   return result;
 }
 
-function checkAlertRules(results) {
-  const rules = db.prepare('SELECT * FROM alert_rules WHERE enabled = 1').all();
-  const insertAlert = db.prepare(`INSERT INTO alerts (device_id,severity,message) VALUES (?,?,?)`);
-  const insertEvent = db.prepare(`INSERT INTO event_log (device_id,event_type,message,source,severity) VALUES (?,?,?,?,?)`);
-  let alertEngine = null;
-  try { alertEngine = require('../alerting/alert-engine'); } catch {}
-
+async function checkAlertRules(results) {
+  const rules = await db.allRules(true);
   for (const rule of rules) {
     for (const r of results) {
       if (rule.device_id && rule.device_id !== r.deviceId) continue;
@@ -299,16 +285,17 @@ function checkAlertRules(results) {
       }
 
       if (triggered) {
-        const recent = db.prepare(`SELECT id FROM alerts WHERE device_id=? AND message LIKE ? AND status='active' AND created_at > datetime('now','-${rule.cooldown_seconds} seconds')`).get(r.deviceId, `%${rule.name}%`);
+        const since = new Date(Date.now() - (rule.cooldown_seconds || 300) * 1000);
+        const recent = await db.alertByNameSince(r.deviceId, rule.name, since);
         if (!recent) {
           const shown = display !== null ? display : value;
           const msg = `${rule.name}: ${rule.metric_type}=${shown} on ${r.deviceName} (${r.ip})`;
-          insertAlert.run(r.deviceId, rule.severity, msg);
-          insertEvent.run(r.deviceId, 'alert', msg, 'alerting', rule.severity);
+          await db.addAlert(r.deviceId, rule.severity, msg);
+          await db.addEvent(r.deviceId, 'alert', msg, 'alerting', rule.severity);
           if (io) io.emit('alert:new', { deviceId: r.deviceId, severity: rule.severity, message: msg });
-          if (alertEngine && (rule.notify_webhook || rule.notify_email || rule.notify_telegram)) {
+          if (alertEngine() && (rule.notify_webhook || rule.notify_email || rule.notify_telegram)) {
             try {
-              alertEngine.notify({ severity: rule.severity }, msg, {
+              alertEngine().notify({ severity: rule.severity }, msg, {
                 webhook: !!rule.notify_webhook, email: !!rule.notify_email, telegram: !!rule.notify_telegram
               });
             } catch {}
@@ -319,31 +306,46 @@ function checkAlertRules(results) {
   }
 }
 
-function effPingMs() { return db.getSetting('ping_interval_ms', config.poller.pingIntervalMs); }
-function effSnmpMs() { return db.getSetting('snmp_interval_ms', config.poller.snmpIntervalMs); }
+let _alertEngine = null;
+function alertEngine() {
+  if (_alertEngine) return _alertEngine;
+  try { _alertEngine = require('../alerting/alert-engine'); } catch {}
+  return _alertEngine;
+}
 
-function armTimers() {
+async function effPingMs() {
+  const v = await db.getSetting('ping_interval_ms', config.poller.pingIntervalMs);
+  return v;
+}
+async function effSnmpMs() {
+  const v = await db.getSetting('snmp_interval_ms', config.poller.snmpIntervalMs);
+  return v;
+}
+
+async function armTimers() {
   if (interval) { clearInterval(interval); interval = null; }
   if (snmpInterval) { clearInterval(snmpInterval); snmpInterval = null; }
   if (fullSnmpInterval) { clearInterval(fullSnmpInterval); fullSnmpInterval = null; }
-  interval = setInterval(() => pingCycles().catch(e => console.error('[Poller] Ping error:', e.message)), effPingMs());
-  snmpInterval = setInterval(() => lightPoll().catch(e => console.error('[Poller] Light poll error:', e.message)), effSnmpMs());
+  const pms = await effPingMs();
+  const sms = await effSnmpMs();
+  interval = setInterval(() => pingCycles().catch(e => console.error('[Poller] Ping error:', e.message)), pms);
+  snmpInterval = setInterval(() => lightPoll().catch(e => console.error('[Poller] Light poll error:', e.message)), sms);
   fullSnmpInterval = setInterval(() => fullPoll().catch(e => console.error('[Poller] SNMP error:', e.message)), FULL_SNMP_MS);
 }
 
-function start() {
+async function start() {
   if (running) return;
   running = true;
-  console.log(`[Poller] Ping cycle: ${effPingMs()}ms | Light SNMP: ${effSnmpMs()}ms | Full SNMP: ${FULL_SNMP_MS}ms`);
+  console.log(`[Poller] Ping cycle: ${await effPingMs()}ms | Light SNMP: ${await effSnmpMs()}ms | Full SNMP: ${FULL_SNMP_MS}ms`);
   pingCycles().catch(e => console.error('[Poller] Initial ping error:', e.message));
   fullPoll().catch(e => console.error('[Poller] Initial snmp error:', e.message));
-  armTimers();
+  await armTimers();
 }
 
-function applyIntervals() {
+async function applyIntervals() {
   if (!running) return;
-  armTimers();
-  console.log(`[Poller] Intervals updated: ping ${effPingMs()}ms | SNMP ${effSnmpMs()}ms | Full ${FULL_SNMP_MS}ms`);
+  await armTimers();
+  console.log(`[Poller] Intervals updated: ping ${await effPingMs()}ms | SNMP ${await effSnmpMs()}ms | Full ${FULL_SNMP_MS}ms`);
 }
 
 function stop() {

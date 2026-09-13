@@ -932,27 +932,22 @@ async function pollLight(device, boundIfs) {
   return result;
 }
 
-function saveInterfaces(deviceId, interfaces) {
-  const ensure = db.prepare(`INSERT OR IGNORE INTO interfaces (device_id,if_index) VALUES (?,?)`);
-  const metric = db.prepare(`INSERT INTO metric_history (device_id,metric_type,interface_name,value) VALUES (?,?,?,?)`);
-  const cols = ['if_name','if_type','if_speed','if_oper_status','if_admin_status','if_in_octets','if_out_octets','if_in_errors','if_out_errors','sfp_rx_dbm','sfp_tx_dbm','sfp_temp_c','sfp_voltage_v','sfp_bias_ma'];
-  const txn = db.transaction(() => {
-    for (const i of interfaces) {
-      // Never store a row we can't show status for — a missing oper status
-      // (timed-out walk) must not overwrite good data with 0 (= Down).
-      if (i.if_oper_status === undefined) continue;
-      // Nameless interfaces are not stored at all.
-      if (!i.if_name || String(i.if_name).trim() === '') continue;
-      ensure.run(deviceId, i.if_index);
-      const sets = [], vals = [];
-      for (const c of cols) if (i[c] !== undefined) { sets.push(c + '=?'); vals.push(i[c]); }
-      sets.push("last_updated=datetime('now')");
-      db.prepare(`UPDATE interfaces SET ${sets.join(',')} WHERE device_id=? AND if_index=?`).run(...vals, deviceId, i.if_index);
-      if (i.if_name && i.if_in_octets) metric.run(deviceId, 'interface_rx', i.if_name, i.if_in_octets);
-      if (i.if_name && i.if_out_octets) metric.run(deviceId, 'interface_tx', i.if_name, i.if_out_octets);
-    }
-  });
-  txn();
+async function saveInterfaces(deviceId, interfaces) {
+  const cols = ['if_name', 'if_type', 'if_speed', 'if_oper_status', 'if_admin_status', 'if_in_octets', 'if_out_octets', 'if_in_errors', 'if_out_errors', 'sfp_rx_dbm', 'sfp_tx_dbm', 'sfp_temp_c', 'sfp_voltage_v', 'sfp_bias_ma'];
+  const metricRows = [];
+  for (const i of interfaces) {
+    // Never store a row we can't show status for — a missing oper status
+    // (timed-out walk) must not overwrite good data with 0 (= Down).
+    if (i.if_oper_status === undefined) continue;
+    // Nameless interfaces are not stored at all.
+    if (!i.if_name || String(i.if_name).trim() === '') continue;
+    const set = {};
+    for (const c of cols) if (i[c] !== undefined) set[c] = i[c];
+    await db.upsertInterface(deviceId, i.if_index, set);
+    if (i.if_name && i.if_in_octets) metricRows.push({ device_id: deviceId, metric_type: 'interface_rx', interface_name: i.if_name, value: i.if_in_octets });
+    if (i.if_name && i.if_out_octets) metricRows.push({ device_id: deviceId, metric_type: 'interface_tx', interface_name: i.if_name, value: i.if_out_octets });
+  }
+  if (metricRows.length) await db.addMetricsBulk(metricRows);
 }
 
 module.exports = { OIDS, createSession, snmpGet, snmpWalk, pollDevice, pollLight, pollDomFull, pollDomLight, parseMtxrOptical, findHrStorageInstances, computeHrFromCells, applyDomToInterfaces, isSfpInterfaceName, scaleToExponent, sensorActual, wattsToDbm, saveInterfaces, parseStorage };

@@ -5,11 +5,11 @@ let server = null;
 
 function start(io) {
   server = dgram.createSocket('udp4');
-  server.on('message', (msg, rinfo) => {
+  server.on('message', async (msg, rinfo) => {
     try {
-      const dev = db.prepare('SELECT id FROM devices WHERE ip_address=?').get(rinfo.address);
+      const dev = await db.devByIp(rinfo.address);
       const message = `SNMP Trap from ${rinfo.address}: ${msg.length} bytes`;
-      db.prepare(`INSERT INTO event_log (device_id,event_type,message,source,severity) VALUES (?,?,?,?)`).run(dev?.id||null, 'trap', message, 'snmp-trap', 'info');
+      await db.addEvent(dev?.id || null, 'trap', message, 'snmp-trap', 'info');
       if (io) io.emit('trap:received', { agentIp: rinfo.address, timestamp: new Date().toISOString() });
     } catch {}
   });

@@ -8,7 +8,8 @@ module.exports = {
     jwtExpiresIn: '7d'
   },
   database: {
-    path: path.join(__dirname, '..', 'data', 'webnms.db')
+    uri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
+    name: process.env.MONGO_DB || 'webnms'
   },
   poller: {
     intervalMs: parseInt(process.env.POLL_INTERVAL) || 10000,
