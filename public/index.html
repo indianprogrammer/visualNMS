@@ -84,6 +84,24 @@
     <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btn-save-snmp">Save</button></div>
   </div></div></div>
 
+  <div class="modal modal-blur fade" id="modal-user" tabindex="-1"><div class="modal-dialog modal-xl"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="um-modal-title">Add User</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="um-id">
+      <div class="row mb-3">
+        <div class="col-md-4"><label class="form-label">Username</label><input type="text" class="form-control" id="um-user" autocomplete="off"></div>
+        <div class="col-md-4"><label class="form-label">Password</label><input type="password" class="form-control" id="um-pass" autocomplete="new-password" placeholder="Min 4 chars"></div>
+        <div class="col-md-4"><label class="form-label">Role</label><select class="form-select" id="um-role"><option value="readonly">Read Only</option><option value="readwrite">Read / Write</option><option value="admin">Admin</option></select></div>
+      </div>
+      <div class="mb-3"><label class="form-label">Quick template</label><div class="d-flex gap-2"><button type="button" class="btn btn-sm btn-secondary" onclick="umTemplate('readonly')">Read Only</button><button type="button" class="btn btn-sm btn-secondary" onclick="umTemplate('readwrite')">Read / Write</button><button type="button" class="btn btn-sm btn-secondary" onclick="umTemplate('all')">All Features</button></div></div>
+      <div class="row g-3">
+        <div class="col-md-4"><div class="card"><div class="card-header"><h3 class="card-title">Page Access</h3></div><div class="card-body" id="um-pages"></div></div></div>
+        <div class="col-md-8"><div class="card"><div class="card-header"><h3 class="card-title">Operations</h3></div><div class="card-body" id="um-ops"></div></div></div>
+      </div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btn-save-user">Save</button></div>
+  </div></div></div>
+
   <div class="modal modal-blur fade" id="modal-ping" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title" id="ping-modal-title">PING</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
@@ -108,6 +126,6 @@
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape-grid-guide@2.3.3/cytoscape-grid-guide.js"></script>
-  <script src="/js/app.js?v=20260913q"></script>
+  <script src="/js/app.js?v=20260913r"></script>
 </body>
 </html>

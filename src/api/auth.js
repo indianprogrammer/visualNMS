@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('../database/db');
 const config = require('../config/config');
+const perms = require('./permissions');
 
 async function initAdmin() {
   try {
@@ -29,4 +30,34 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { initAdmin, signToken, requireAuth };
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'No token' });
+    if (req.user.role !== role) return res.status(403).json({ error: 'Forbidden: admin only' });
+    next();
+  };
+}
+
+// Live permission check: reads the user's current record so permission changes
+// apply immediately without a re-login. Admins bypass all checks.
+function requirePerm(kind, key) {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'No token' });
+      if (req.user.role === 'admin') return next();
+      const u = await db.findOne('users', { id: db.id(req.user.id) });
+      if (!u) return res.status(401).json({ error: 'Unknown user' });
+      if (u.role === 'admin') return next();
+      // Missing permissions block: fall back to the role template semantics.
+      const p = u.permissions || {};
+      if (!Array.isArray(p[kind])) {
+        if (kind === 'pages') return next();
+        return u.role === 'readwrite' ? next() : res.status(403).json({ error: 'Forbidden' });
+      }
+      if (!perms.has(p, kind, key)) return res.status(403).json({ error: 'Forbidden' });
+      next();
+    } catch (e) { next(e); }
+  };
+}
+
+module.exports = { initAdmin, signToken, requireAuth, requireRole, requirePerm, permissions: perms };

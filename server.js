@@ -11,6 +11,7 @@ const auth = require('./src/api/auth');
 const routes = require('./src/api/routes');
 const wsServer = require('./src/websocket/ws-server');
 const pollerEngine = require('./src/pollers/poller-engine');
+const maintenance = require('./src/database/maintenance');
 const alertEngine = require('./src/alerting/alert-engine');
 const syslogListener = require('./src/syslog/syslog-listener');
 const trapListener = require('./src/traps/trap-listener');
@@ -42,8 +43,11 @@ async function main() {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
 
-  process.on('SIGINT', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
-  process.on('SIGTERM', () => { pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
+  // Retain/downsample background job: every 10 minutes once the server is up.
+  const maintTimer = setInterval(() => maintenance.runMaintenance().catch(() => {}), 10 * 60 * 1000);
+
+  process.on('SIGINT', () => { clearInterval(maintTimer); pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
+  process.on('SIGTERM', () => { clearInterval(maintTimer); pollerEngine.stop(); syslogListener.stop(); trapListener.stop(); server.close(); process.exit(0); });
 
   server.listen(config.server.port, config.server.host, async () => {
     console.log(`\n  ╔══════════════════════════════════════╗`);
@@ -55,6 +59,7 @@ async function main() {
     try { syslogListener.start(io); } catch {}
     try { trapListener.start(io); } catch {}
     await db.addEvent(null, 'system', 'Server started', 'system', 'info');
+    maintenance.runMaintenance().catch((e) => console.error('[Maint] startup run failed:', e.message));
   });
 }
 

@@ -24,12 +24,16 @@ async function connect() {
   db.col = (n) => mdb.collection(n);
 
   await ensureIndexes();
+  await normalizeMetricTimestamps();
   await seedDefaults();
   return db;
 }
 
 async function ensureIndexes() {
   const idx = async (c, keys, opts) => mdb.collection(c).createIndex(keys, opts || {});
+  const idCols = ['users', 'devices', 'maps', 'map_nodes', 'map_links', 'interfaces', 'metric_history', 'last_metrics', 'link_rate_history', 'alerts', 'alert_rules', 'event_log', 'snmp_profiles', 'discovery_jobs'];
+  const uniqId = { name: 'uniq_id' };
+  for (const c of idCols) await idx(c, { id: 1 }, { unique: true, ...uniqId });
   await idx('users', { username: 1 }, { unique: true });
   await idx('devices', { ip_address: 1 }, { unique: true });
   await idx('devices', { name: 1 });
@@ -38,18 +42,32 @@ async function ensureIndexes() {
   await idx('last_metrics', { device_id: 1, metric_type: 1 }, { unique: true });
   await idx('metric_history', { device_id: 1, timestamp: -1 });
   await idx('metric_history', { device_id: 1, metric_type: 1, interface_name: 1, timestamp: -1 });
+  await idx('metric_history', { timestamp: 1 });
   await idx('link_rate_history', { device_id: 1, interface_name: 1, timestamp: -1 });
   await idx('link_rate_history', { timestamp: 1 });
   await idx('alerts', { device_id: 1, created_at: -1 });
-  await idx('alerts', { status: 1 });
+  await idx('alerts', { status: 1, created_at: -1 });
   await idx('alert_rules', { enabled: 1 });
   await idx('event_log', { created_at: -1 });
   await idx('event_log', { device_id: 1, created_at: -1 });
-  await idx('event_log', { event_type: 1 });
+  await idx('event_log', { event_type: 1, created_at: -1 });
   await idx('snmp_profiles', { name: 1 }, { unique: true });
   await idx('map_nodes', { map_id: 1 });
+  await idx('map_nodes', { device_id: 1 });
   await idx('map_links', { map_id: 1 });
   await idx('discovery_jobs', { created_at: -1 });
+}
+
+// metric_history rows used to be written with two different shapes: single
+// inserts carried `created_at` only, bulk inserts `timestamp` only. Backfill
+// the missing field from the other so every row is queryable by either.
+async function normalizeMetricTimestamps() {
+  try {
+    const c = mdb.collection('metric_history');
+    const r1 = await c.updateMany({ timestamp: { $exists: false }, created_at: { $type: 'date' } }, [{ $set: { timestamp: '$created_at' } }]);
+    const r2 = await c.updateMany({ created_at: { $exists: false }, timestamp: { $type: 'date' } }, [{ $set: { created_at: '$timestamp' } }]);
+    if ((r1.modifiedCount || 0) + (r2.modifiedCount || 0) > 0) console.log(`[Mongo] Normalized metric_history timestamps (${r1.modifiedCount}/${r2.modifiedCount})`);
+  } catch (e) { console.error('[Mongo] timestamp normalization failed:', e.message); }
 }
 
 async function seedDefaults() {
@@ -58,6 +76,9 @@ async function seedDefaults() {
   }
   for (const key of ['snmp_interval_ms', 'ping_interval_ms']) {
     await mdb.collection('settings').updateOne({ _id: key }, { $setOnInsert: { value: '5000' } }, { upsert: true });
+  }
+  for (const key of ['retention_days', 'aggregate_after_days']) {
+    await mdb.collection('settings').updateOne({ _id: key }, { $setOnInsert: { value: key === 'retention_days' ? '365' : '30' } }, { upsert: true });
   }
   const defProfile = await mdb.collection('snmp_profiles').findOne({ name: 'Default v2c' });
   if (!defProfile) {
@@ -145,10 +166,10 @@ db.setDevStatus = (id, status) => db.updateOne('devices', { id }, { $set: { stat
 
 // ── metrics (metric_history / last_metrics) ──
 db.addMetric = (deviceId, type, value, ifName) =>
-  db.ins('metric_history', { device_id: db.id(deviceId), metric_type: type, interface_name: ifName || null, value });
+  db.ins('metric_history', { device_id: db.id(deviceId), metric_type: type, interface_name: ifName || null, value, timestamp: new Date() });
 
 db.addMetricsBulk = (rows) => bulkSeq('metric_history', rows, (r, id, ts) => ({
-  id, device_id: r.device_id, metric_type: r.metric_type, interface_name: r.interface_name || null, value: r.value, timestamp: ts
+  id, device_id: r.device_id, metric_type: r.metric_type, interface_name: r.interface_name || null, value: r.value, timestamp: ts, created_at: ts
 }));
 
 db.upsertLastM = async (deviceId, type, value) => {
@@ -186,7 +207,7 @@ db.upsertInterface = async (deviceId, ifIndex, set) => {
 };
 db.ifByDevIndex = (deviceId, ifIndex) => db.findOne('interfaces', { device_id: db.id(deviceId), if_index: ifIndex });
 db.ifByName = (deviceId, ifName) => db.findOne('interfaces', { device_id: db.id(deviceId), if_name: ifName });
-db.interfacesByDev = (deviceId) => db.find('interfaces', { device_id: db.id(deviceId), if_name: { $ne: null }, if_name: { $ne: '' } }, { sort: { if_index: 1 } });
+db.interfacesByDev = (deviceId) => db.find('interfaces', { device_id: db.id(deviceId), if_name: { $nin: [null, ''] } }, { sort: { if_index: 1 } });
 
 // ── link_rate_history ──
 db.addRateBulk = (rows) => bulkSeq('link_rate_history', rows, (r, id, ts) => ({

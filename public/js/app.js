@@ -6,11 +6,32 @@ var cy = null;
 var charts = {};
 var selectedMapId = null;
 
+// ── Permissions ──
+var PERMS={pages:[],ops:[],templates:{}};
+var NAV_KEY={'dashboard':'dashboard','topology':'topology','devices':'devices','alerts':'alerts','discovery':'discovery','tools':'tools','logs':'events','settings':'settings'};
+function hasPerm(list,key){
+  if(!currentUser) return false;
+  if(currentUser.role==='admin') return true;
+  var p=currentUser.permissions||{};
+  var arr=p[list];
+  if(!Array.isArray(arr)) return list==='pages'||currentUser.role==='readwrite';
+  return arr.indexOf(key)>=0;
+}
+function canPage(key){return hasPerm('pages',key);}
+function canOp(key){return hasPerm('ops',key);}
+function bOp(key,html){return canOp(key)?html:'';}
+function applyNavPerms(){
+  document.querySelectorAll('#nav-menu .nav-link').forEach(function(l){
+    var pg=NAV_KEY[l.getAttribute('data-page')];
+    if(pg&&!canPage(pg))l.style.display='none';
+  });
+}
+
 function api(path, opts) {
   opts = opts || {};
   var h = { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' };
   return fetch('/api' + path, { method: opts.method || 'GET', headers: h, body: opts.body ? JSON.stringify(opts.body) : undefined })
-    .then(function(r) { if (r.status === 401) { AUTH_TOKEN = null; localStorage.removeItem('webnms_token'); showLogin(); throw new Error('401'); } return r.json(); });
+    .then(function(r) { if (r.status === 401) { AUTH_TOKEN = null; localStorage.removeItem('webnms_token'); showLogin(); throw new Error('401'); } return r.json().then(function(d){ if(r.status===403){ toast(d.error||'Permission denied','critical'); throw new Error(d.error||'403'); } return d; }); });
 }
 function toast(msg, sev) {
   sev = sev || 'info';
@@ -160,8 +181,14 @@ function doLogout() { AUTH_TOKEN=null; currentUser=null; localStorage.removeItem
 function startApp() {
   document.getElementById('login-root').style.display = 'none';
   document.getElementById('app-root').style.display = '';
-  api('/auth/me').then(function(u){currentUser=u;}).catch(function(){});
-  connectSocket(); bindNav(); navigateTo('dashboard');
+  api('/auth/me').then(function(u){
+    if(u&&u.username)currentUser=u;
+    api('/auth/permissions').then(function(m){PERMS=m;}).catch(function(){});
+    applyNavPerms(); connectSocket(); bindNav(); navigateTo('dashboard');
+  }).catch(function(){
+    currentUser=currentUser||{id:1,username:'admin',role:'admin'};
+    applyNavPerms(); connectSocket(); bindNav(); navigateTo('dashboard');
+  });
 }
 function connectSocket() {
   if(socket) socket.disconnect();
@@ -183,6 +210,11 @@ function bindNav() {
 }
 function navigateTo(page) {
   if(!page) return;
+  var pg=NAV_KEY[page];
+  if(pg&&!canPage(pg)){
+    if(canPage('dashboard')){navigateTo('dashboard');return;}
+    showLogin();return;
+  }
   currentPage = page;
   var links = document.querySelectorAll('#nav-menu .nav-link');
   for(var i=0;i<links.length;i++) links[i].classList.toggle('active',links[i].getAttribute('data-page')===page);
@@ -216,10 +248,10 @@ function liveDash(r){var u=0,d=0;r.forEach(function(x){if(x.ping&&x.ping.reachab
 
 // ═══ DEVICES ═══
 function loadDevices() {
-  pHTML('<div class="d-flex justify-content-between mb-3"><input type="text" class="form-control" id="dev-search" placeholder="Search..." style="width:300px"><div class="d-flex gap-2"><button class="btn btn-primary" onclick="openDevModal()"><i class="ti ti-plus"></i> Add</button><button class="btn btn-secondary" onclick="doPoll()"><i class="ti ti-refresh"></i> Poll</button></div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Status</th><th>Name</th><th>IP</th><th>Type</th><th>SNMP</th><th>Last Seen</th><th>Actions</th></tr></thead><tbody id="dev-tb"></tbody></table></div></div>');
+  pHTML('<div class="d-flex justify-content-between mb-3"><input type="text" class="form-control" id="dev-search" placeholder="Search..." style="width:300px"><div class="d-flex gap-2">'+bOp('device:add','<button class="btn btn-primary" onclick="openDevModal()"><i class="ti ti-plus"></i> Add</button>')+bOp('trigger:poll','<button class="btn btn-secondary" onclick="doPoll()"><i class="ti ti-refresh"></i> Poll</button>')+'</div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Status</th><th>Name</th><th>IP</th><th>Type</th><th>SNMP</th><th>Last Seen</th><th>Actions</th></tr></thead><tbody id="dev-tb"></tbody></table></div></div>');
   api('/devices').then(function(dvs){
     var tb=document.getElementById('dev-tb');if(!tb)return;
-    tb.innerHTML=dvs.map(function(d){return '<tr><td><span class="status-dot '+d.status+'"></span>'+d.status+'</td><td class="fw-medium">'+esc(d.name)+'</td><td><code>'+d.ip_address+'</code></td><td>'+d.device_type+'</td><td>v'+d.snmp_version+'</td><td>'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</td><td><div class="btn-list flex-nowrap"><button class="btn btn-ghost btn-sm" onclick="viewDevice('+d.id+')"><i class="ti ti-eye"></i></button><button class="btn btn-ghost btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i></button><button class="btn btn-ghost btn-sm text-danger" onclick="delDevice('+d.id+')"><i class="ti ti-trash"></i></button></div></td></tr>';}).join('');
+    tb.innerHTML=dvs.map(function(d){return '<tr><td><span class="status-dot '+d.status+'"></span>'+d.status+'</td><td class="fw-medium">'+esc(d.name)+'</td><td><code>'+d.ip_address+'</code></td><td>'+d.device_type+'</td><td>v'+d.snmp_version+'</td><td>'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</td><td><div class="btn-list flex-nowrap"><button class="btn btn-ghost btn-sm" onclick="viewDevice('+d.id+')"><i class="ti ti-eye"></i></button>'+bOp('device:edit','<button class="btn btn-ghost btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i></button>')+bOp('device:delete','<button class="btn btn-ghost btn-sm text-danger" onclick="delDevice('+d.id+')"><i class="ti ti-trash"></i></button>')+'</div></td></tr>';}).join('');
     document.getElementById('dev-search').oninput=function(q){var v=q.target.value.toLowerCase();tb.querySelectorAll('tr').forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(v)>=0?'':'none';});};
   }).catch(function(e){console.error(e);});
 }
@@ -280,7 +312,7 @@ function viewDevice(id) {
   window._viewDevId=id;
   Promise.all([api('/devices/'+id),api('/devices/'+id+'/metrics?limit=100'),api('/devices/'+id+'/interfaces')]).then(function(a){
     var d=a[0],mx=a[1],ifc=a[2];
-    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex align-items-center gap-2"><button class="btn btn-ghost btn-sm" onclick="loadDevices()"><i class="ti ti-arrow-left"></i></button><h3 class="mb-0">'+esc(d.name)+'</h3><span class="badge bg-'+(d.status==='up'?'success':'danger')+'">'+d.status+'</span></div><div class="d-flex gap-2"><button class="btn btn-primary btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i> Edit</button></div></div><div class="row mb-3"><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">IP</div><div class="fw-bold">'+d.ip_address+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Type</div><div class="fw-bold">'+d.device_type+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Last Seen</div><div class="fw-bold">'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">SNMP</div><div class="fw-bold">v'+d.snmp_version+'</div></div></div></div></div><div class="row mb-3"><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Ping Latency</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-ping"></canvas></div></div></div></div><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">CPU & Memory</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-cpu"></canvas></div></div></div></div></div>'+(ifc.length?'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Interfaces <span class="live-indicator ms-1"></span></h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th><th>SFP Rx/Tx</th></tr></thead><tbody id="dev-if-tb">'+ifc.map(ifRow).join('')+'</tbody></table></div></div>':'')+'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Actions</h3></div><div class="card-body d-flex gap-2"><button class="btn btn-primary" onclick="pingDev('+d.id+')"><i class="ti ti-send"></i> Ping</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'traceroute\')"><i class="ti ti-route"></i> Traceroute</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'portscan\')"><i class="ti ti-network"></i> Port Scan</button></div></div>');
+    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex align-items-center gap-2"><button class="btn btn-ghost btn-sm" onclick="loadDevices()"><i class="ti ti-arrow-left"></i></button><h3 class="mb-0">'+esc(d.name)+'</h3><span class="badge bg-'+(d.status==='up'?'success':'danger')+'">'+d.status+'</span></div><div class="d-flex gap-2">'+bOp('device:edit','<button class="btn btn-primary btn-sm" onclick="editDevice('+d.id+')"><i class="ti ti-pencil"></i> Edit</button>')+'</div></div><div class="row mb-3"><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">IP</div><div class="fw-bold">'+d.ip_address+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Type</div><div class="fw-bold">'+d.device_type+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">Last Seen</div><div class="fw-bold">'+(d.last_seen?new Date(d.last_seen).toLocaleString():'Never')+'</div></div></div></div><div class="col-md-3"><div class="card"><div class="card-body"><div class="stat-label">SNMP</div><div class="fw-bold">v'+d.snmp_version+'</div></div></div></div></div><div class="row mb-3"><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">Ping Latency</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-ping"></canvas></div></div></div></div><div class="col-lg-6"><div class="card"><div class="card-header"><h3 class="card-title">CPU & Memory</h3></div><div class="card-body"><div class="chart-container"><canvas id="ch-cpu"></canvas></div></div></div></div></div>'+(ifc.length?'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Interfaces <span class="live-indicator ms-1"></span></h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Speed</th><th>Rx</th><th>Tx</th><th>Err</th><th>SFP Rx/Tx</th></tr></thead><tbody id="dev-if-tb">'+ifc.map(ifRow).join('')+'</tbody></table></div></div>':'')+'<div class="card mb-3"><div class="card-header"><h3 class="card-title">Actions</h3></div><div class="card-body d-flex gap-2"><button class="btn btn-primary" onclick="pingDev('+d.id+')"><i class="ti ti-send"></i> Ping</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'traceroute\')"><i class="ti ti-route"></i> Traceroute</button><button class="btn btn-secondary" onclick="navTool(\''+d.ip_address+'\',\'portscan\')"><i class="ti ti-network"></i> Port Scan</button></div></div>');
     var pd=mx.filter(function(m){return m.metric_type==='ping';}).reverse();
     var cd=mx.filter(function(m){return m.metric_type==='cpu';}).reverse();
     var md=mx.filter(function(m){return m.metric_type==='memory';}).reverse();
@@ -317,7 +349,7 @@ document.getElementById('btn-save-dev').onclick=function(){
 // ═══ TOPOLOGY ═══
 function loadTopology() {
   api('/maps').then(function(maps){
-    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select><button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button></div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative" id="topo-wrap"><div class="topology-container" id="cy-topo"></div><div id="node-tip"></div><div id="link-tip"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
+    pHTML('<div class="topology-wrapper"><div class="topo-toolbar"><div class="d-flex gap-2 align-items-center"><select class="form-select" id="topo-sel" style="width:250px"><option value="">Select map...</option>'+maps.map(function(m){return '<option value="'+m.id+'">'+esc(m.title)+'</option>';}).join('')+'</select>'+bOp('map:add','<button class="btn btn-secondary" onclick="new bootstrap.Modal(document.getElementById(\'modal-map\')).show()"><i class="ti ti-plus"></i> New Map</button>')+'</div><div class="d-flex gap-2" id="topo-tools" style="display:none"><button class="btn btn-sm btn-secondary" onclick="topoZoom(1)"><i class="ti ti-zoom-in"></i></button><button class="btn btn-sm btn-secondary" onclick="topoZoom(-1)"><i class="ti ti-zoom-out"></i></button><button class="btn btn-sm btn-secondary" onclick="if(cy)cy.fit(undefined,50)"><i class="ti ti-zoom-fit"></i> Fit</button></div></div><div style="position:relative" id="topo-wrap"><div class="topology-container" id="cy-topo"></div><div id="node-tip"></div><div id="link-tip"></div><div id="topo-palette" class="map-node-palette"><div class="text-muted small mb-1">Click to add:</div><div id="palette-list"></div></div></div></div>');
     var tsel=document.getElementById('topo-sel');if(!tsel)return;
     tsel.onchange=function(e){if(e.target.value){selectedMapId=parseInt(e.target.value);document.getElementById('topo-tools').style.display='';loadMap(selectedMapId);}};
     if(maps.length){tsel.value=maps[0].id;selectedMapId=maps[0].id;document.getElementById('topo-tools').style.display='';loadMap(maps[0].id);}
@@ -331,7 +363,7 @@ function loadMap(mapId) {
     md.nodes.forEach(function(n){els.push(topoNodeEl(n));});
     md.links.forEach(function(l){els.push(topoLinkEl(l));});
     cy=cytoscape({container:document.getElementById('cy-topo'),elements:els,layout:{name:'preset'},zoom:1,minZoom:0.1,maxZoom:4,boxSelectionEnabled:false,autoungrabify:false,autounselectify:false,userZoomingEnabled:true,userPanningEnabled:true,style:[
-      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':70,'font-size':'10px','font-weight':'bold','color':thLabel(),'text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
+      {selector:'node',style:{'label':'data(label)','background-color':'data(statusColor)','border-color':'rgba(0,0,0,0.35)','border-width':1,'width':150,'height':44,'font-size':'10px','font-weight':'bold','color':thLabel(),'text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':'140px','shape':'round-rectangle','text-outline-width':0,'cursor':'grab'}},
       {selector:'node:grabbed',style:{'cursor':'grabbing','border-width':3,'border-color':'#357bfd'}},
       {selector:'node.wireless_ap',style:{'shape':'ellipse'}},
       {selector:'node.network',style:{'shape':'ellipse','background-color':thNetworkBg(),'border-style':'dashed','border-color':'#5b8fd4'}},
@@ -1155,12 +1187,10 @@ function renderNodeLabel(n){
     if(n.hasClass('static')){n.data('label',n.data('_hover')?n.data('name'):'');return;}
     n.data('label',n.data('name'));return;
   }
-  var parts=[n.data('name'),n.data('ip')||''];
+  var parts=[n.data('name')];
+  var ip=n.data('ip')||'';
   var lat=n.data('lat');
-  var status=n.data('statusColor')==='#e53e3e'?'DOWN':(lat==='--'?'':'UP');
-  var line=status;
-  if(status==='UP'&&typeof lat==='number')line+=' '+lat+'ms';
-  if(line)parts.push(line);
+  if(ip){parts.push(typeof lat==='number'?ip+' ('+lat+'ms)':ip);}
   var stats=[];
   if(n.data('cpu')!=null)stats.push('CPU '+n.data('cpu')+'%');
   if(n.data('mem')!=null)stats.push('MEM '+n.data('mem')+'%');
@@ -1202,7 +1232,7 @@ function fetchAlerts(){
   api(u).then(function(als){
     var tb=document.getElementById('al-tb');if(!tb)return;
     if(!als.length){tb.innerHTML='<tr><td colspan="6" class="text-center text-muted p-3">No alerts</td></tr>';return;}
-    tb.innerHTML=als.map(function(a){return '<tr><td><span class="badge bg-'+(a.severity==='critical'?'danger':a.severity==='warning'?'warning':'info')+'">'+a.severity+'</span></td><td>'+esc(a.device_name||'System')+'</td><td>'+esc(a.message)+'</td><td><span class="badge bg-'+(a.status==='active'?'danger':a.status==='acknowledged'?'warning':'success')+'">'+a.status+'</span></td><td>'+new Date(a.created_at).toLocaleString()+'</td><td>'+(a.status==='active'?'<button class="btn btn-ghost btn-sm" onclick="ackAlert('+a.id+')"><i class="ti ti-check"></i></button> ':'')+(a.status!=='resolved'?'<button class="btn btn-ghost btn-sm" onclick="resolveAlert('+a.id+')"><i class="ti ti-circle-check"></i></button>':'')+'</td></tr>';}).join('');
+    tb.innerHTML=als.map(function(a){return '<tr><td><span class="badge bg-'+(a.severity==='critical'?'danger':a.severity==='warning'?'warning':'info')+'">'+a.severity+'</span></td><td>'+esc(a.device_name||'System')+'</td><td>'+esc(a.message)+'</td><td><span class="badge bg-'+(a.status==='active'?'danger':a.status==='acknowledged'?'warning':'success')+'">'+a.status+'</span></td><td>'+new Date(a.created_at).toLocaleString()+'</td><td>'+((a.status==='active')?bOp('alert:ack','<button class="btn btn-ghost btn-sm" onclick="ackAlert('+a.id+')"><i class="ti ti-check"></i></button> '):'')+((a.status!=='resolved')?bOp('alert:resolve','<button class="btn btn-ghost btn-sm" onclick="resolveAlert('+a.id+')"><i class="ti ti-circle-check"></i></button>'):'')+'</td></tr>';}).join('');
   });
 }
 function ackAlert(id){api('/alerts/'+id+'/acknowledge',{method:'POST'}).then(fetchAlerts);}
@@ -1210,7 +1240,7 @@ function resolveAlert(id){api('/alerts/'+id+'/resolve',{method:'POST'}).then(fet
 
 function loadAlertRules(){
   api('/alert-rules').then(function(rules){
-    pHTML('<div class="d-flex justify-content-between mb-3"><h3>Alert Rules</h3><div class="d-flex gap-2"><button class="btn btn-secondary" onclick="loadAlerts()"><i class="ti ti-arrow-left"></i> Back</button><button class="btn btn-primary" onclick="new bootstrap.Modal(document.getElementById(\'modal-rule\')).show()"><i class="ti ti-plus"></i> Add</button></div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Cooldown</th><th>Actions</th></tr></thead><tbody>'+rules.map(function(r){return '<tr><td class="fw-medium">'+esc(r.name)+'</td><td>'+r.metric_type+'</td><td><code>'+r.condition_op+' '+r.threshold+'</code></td><td><span class="badge bg-'+(r.severity==='critical'?'danger':'warning')+'">'+r.severity+'</span></td><td>'+r.cooldown_seconds+'s</td><td><button class="btn btn-ghost btn-sm text-danger" onclick="delRule('+r.id+')"><i class="ti ti-trash"></i></button></td></tr>';}).join('')+'</tbody></table></div></div><div class="modal fade" id="modal-rule" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Alert Rule</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="rf-name"></div><div class="row"><div class="col-md-5 mb-3"><label class="form-label">Metric</label><select class="form-select" id="rf-met"><option value="ping">Ping Latency</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="disk">Disk</option><option value="packet_loss">Packet Loss</option><option value="status">Status</option></select></div><div class="col-md-3 mb-3"><label class="form-label">Op</label><select class="form-select" id="rf-op"><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="ge">&ge;</option></select></div><div class="col-md-4 mb-3"><label class="form-label">Threshold</label><input type="number" class="form-control" id="rf-th" value="80"></div></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Severity</label><select class="form-select" id="rf-sev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div><div class="col-md-6 mb-3"><label class="form-label">Cooldown</label><input type="number" class="form-control" id="rf-cd" value="300"></div></div><div class="mb-3"><label class="form-label">Notify via</label><div class="d-flex gap-3"><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-browser" checked> Browser</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-webhook" checked> Webhook</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-email"> Email</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-telegram"> Telegram</label></div></div></div><div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveRule()">Save</button></div></div></div></div>');
+    pHTML('<div class="d-flex justify-content-between mb-3"><h3>Alert Rules</h3><div class="d-flex gap-2"><button class="btn btn-secondary" onclick="loadAlerts()"><i class="ti ti-arrow-left"></i> Back</button>' + bOp('rules:manage','<button class="btn btn-primary" onclick="new bootstrap.Modal(document.getElementById(\'modal-rule\')).show()"><i class="ti ti-plus"></i> Add</button>') + '</div></div><div class="card"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Cooldown</th><th>Actions</th></tr></thead><tbody>'+rules.map(function(r){return '<tr><td class="fw-medium">'+esc(r.name)+'</td><td>'+r.metric_type+'</td><td><code>'+r.condition_op+' '+r.threshold+'</code></td><td><span class="badge bg-'+(r.severity==='critical'?'danger':'warning')+'">'+r.severity+'</span></td><td>'+r.cooldown_seconds+'s</td><td>'+bOp('rules:manage','<button class="btn btn-ghost btn-sm text-danger" onclick="delRule('+r.id+')"><i class="ti ti-trash"></i></button>')+'</td></tr>';}).join('')+'</tbody></table></div></div><div class="modal fade" id="modal-rule" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Alert Rule</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="rf-name"></div><div class="row"><div class="col-md-5 mb-3"><label class="form-label">Metric</label><select class="form-select" id="rf-met"><option value="ping">Ping Latency</option><option value="cpu">CPU</option><option value="memory">Memory</option><option value="disk">Disk</option><option value="packet_loss">Packet Loss</option><option value="status">Status</option></select></div><div class="col-md-3 mb-3"><label class="form-label">Op</label><select class="form-select" id="rf-op"><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="ge">&ge;</option></select></div><div class="col-md-4 mb-3"><label class="form-label">Threshold</label><input type="number" class="form-control" id="rf-th" value="80"></div></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Severity</label><select class="form-select" id="rf-sev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div><div class="col-md-6 mb-3"><label class="form-label">Cooldown</label><input type="number" class="form-control" id="rf-cd" value="300"></div></div><div class="mb-3"><label class="form-label">Notify via</label><div class="d-flex gap-3"><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-browser" checked> Browser</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-webhook" checked> Webhook</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-email"> Email</label><label class="form-check"><input type="checkbox" class="form-check-input" id="rf-n-telegram"> Telegram</label></div></div></div><div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" onclick="saveRule()">Save</button></div></div></div></div>');
   });
 }
 function saveRule(){
@@ -1222,7 +1252,7 @@ function delRule(id){if(!confirm('Delete rule?'))return;api('/alert-rules/'+id,{
 // ═══ DISCOVERY ═══
 function loadDiscovery(){
   api('/discovery/jobs').then(function(jobs){
-    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex gap-2"><input type="text" class="form-control" id="scan-cidr" placeholder="CIDR: 192.168.1.0/24" style="width:280px"><button class="btn btn-primary" onclick="startScan()"><i class="ti ti-scan"></i> Scan</button></div></div><div class="card"><div class="card-header"><h3 class="card-title">Scan Jobs</h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Subnet</th><th>Status</th><th>Found</th><th>Total</th><th>Started</th><th>Done</th></tr></thead><tbody>'+jobs.map(function(j){return '<tr><td><code>'+j.subnet+'</code></td><td><span class="badge bg-'+(j.status==='completed'?'success':'secondary')+'">'+j.status+'</span></td><td>'+j.found_devices+'</td><td>'+j.total_ips+'</td><td>'+(j.started_at?new Date(j.started_at).toLocaleString():'-')+'</td><td>'+(j.completed_at?new Date(j.completed_at).toLocaleString():'-')+'</td></tr>';}).join('')+'</tbody></table></div></div>');
+    pHTML('<div class="d-flex justify-content-between mb-3"><div class="d-flex gap-2"><input type="text" class="form-control" id="scan-cidr" placeholder="CIDR: 192.168.1.0/24" style="width:280px">'+bOp('discovery:run','<button class="btn btn-primary" onclick="startScan()"><i class="ti ti-scan"></i> Scan</button>')+'</div></div><div class="card"><div class="card-header"><h3 class="card-title">Scan Jobs</h3></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Subnet</th><th>Status</th><th>Found</th><th>Total</th><th>Started</th><th>Done</th></tr></thead><tbody>'+jobs.map(function(j){return '<tr><td><code>'+j.subnet+'</code></td><td><span class="badge bg-'+(j.status==='completed'?'success':'secondary')+'">'+j.status+'</span></td><td>'+j.found_devices+'</td><td>'+j.total_ips+'</td><td>'+(j.started_at?new Date(j.started_at).toLocaleString():'-')+'</td><td>'+(j.completed_at?new Date(j.completed_at).toLocaleString():'-')+'</td></tr>';}).join('')+'</tbody></table></div></div>');
   });
 }
 function startScan(){var s=document.getElementById('scan-cidr').value;if(!s)return;api('/discovery/scan',{method:'POST',body:{subnet:s}}).then(function(){toast('Scan started','success');}).catch(function(){toast('Scan failed','critical');});}
@@ -1245,7 +1275,7 @@ function mtrOnData(d){
   }).join('')||'<tr><td colspan="8" class="text-muted">Probing…</td></tr>';
 }
 function loadTools(){
-  pHTML('<div class="card mb-3"><div class="card-body"><div class="d-flex gap-2 flex-wrap"><select class="form-select" id="tool-type" style="width:180px"><option value="ping">Ping</option><option value="traceroute">Traceroute</option><option value="mtr">MTR</option><option value="portscan">Port Scan</option><option value="dns">DNS Lookup</option><option value="http">HTTP Check</option><option value="snmpwalk">SNMP Walk</option></select><input type="text" class="form-control" id="tool-target" placeholder="Target IP or hostname" style="width:300px"><span id="tool-extra" class="d-flex gap-2"></span><button class="btn btn-primary" onclick="runTool()"><i class="ti ti-player-play"></i> Run</button></div></div></div><div class="card"><div class="card-header"><h3 class="card-title" id="tool-title">Result</h3></div><div class="card-body" id="tool-res"></div></div>');
+  pHTML('<div class="card mb-3"><div class="card-body"><div class="d-flex gap-2 flex-wrap"><select class="form-select" id="tool-type" style="width:180px"><option value="ping">Ping</option><option value="traceroute">Traceroute</option><option value="mtr">MTR</option><option value="portscan">Port Scan</option><option value="dns">DNS Lookup</option><option value="http">HTTP Check</option><option value="snmpwalk">SNMP Walk</option></select><input type="text" class="form-control" id="tool-target" placeholder="Target IP or hostname" style="width:300px"><span id="tool-extra" class="d-flex gap-2"></span>'+bOp('tool:run','<button class="btn btn-primary" onclick="runTool()"><i class="ti ti-player-play"></i> Run</button>')+'</div></div></div><div class="card"><div class="card-header"><h3 class="card-title" id="tool-title">Result</h3></div><div class="card-body" id="tool-res"></div></div>');
   document.getElementById('tool-target').onkeypress=function(e){if(e.key==='Enter')runTool();};
   document.getElementById('tool-type').onchange=function(){mtrStop();toolExtraInputs();};
   toolExtraInputs();
@@ -1343,9 +1373,13 @@ function renderLogs(logs){var b=document.getElementById('log-box');if(!b)return;
 
 // ═══ SETTINGS ═══
 function loadSettings(){
-  pHTML('<ul class="nav nav-tabs mb-3"><li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#st-general"><i class="ti ti-settings me-1"></i>General</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-notify"><i class="ti ti-bell me-1"></i>Notifications</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-retention"><i class="ti ti-database me-1"></i>Data Retention</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-profiles"><i class="ti ti-network me-1"></i>SNMP Profiles</a></li></ul><div class="tab-content"><div class="tab-pane fade show active" id="st-general"><div class="card mb-3"><div class="card-header"><h3 class="card-title">General</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Ping Interval (ms)</label><input type="number" class="form-control" id="set-ping-int" value="5000"></div><div class="mb-3"><label class="form-label">SNMP Interval (ms)</label><input type="number" class="form-control" id="set-snmp-int" value="5000"></div><div class="mb-3"><label class="form-label">SNMP Timeout (ms)</label><input type="number" class="form-control" value="5000"></div><button class="btn btn-primary" id="btn-save-poll">Save</button></div></div></div><div class="tab-pane fade" id="st-notify"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Notifications</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Webhook URL</label><input type="text" class="form-control" id="set-webhook" placeholder="https://hooks..."></div><div class="mb-3"><label class="form-label">Telegram Bot Token</label><input type="text" class="form-control" id="set-tg-token" placeholder="Token" autocomplete="off"></div><div class="mb-3"><label class="form-label">Telegram Chat ID</label><input type="text" class="form-control" id="set-tg-chat" placeholder="Chat ID"></div><div class="mb-3"><label class="form-label">SMTP Host</label><input type="text" class="form-control" id="set-smtp-host" placeholder="smtp.example.com"></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">SMTP User</label><input type="text" class="form-control" id="set-smtp-user" placeholder="user" autocomplete="off"></div><div class="col-md-6 mb-3"><label class="form-label">SMTP Password</label><input type="password" class="form-control" id="set-smtp-pass" placeholder="password" autocomplete="off"></div></div><div class="mb-3"><label class="form-label">Alert Email To</label><input type="email" class="form-control" id="set-email-to" placeholder="admin@example.com"></div><button class="btn btn-primary" id="btn-save-notify">Save</button></div></div></div><div class="tab-pane fade" id="st-retention"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Data Retention</h3></div><div class="card-body"><div class="row"><div class="col-md-4 mb-3"><label class="form-label">Retain (days)</label><input type="number" class="form-control" id="set-retain" value="365"></div><div class="col-md-4 mb-3"><label class="form-label">Aggregate after (days)</label><input type="number" class="form-control" id="set-agg" value="30"></div></div><button class="btn btn-primary" onclick="toast(\'Data retention is applied automatically\',\'info\')">Save</button></div></div></div><div class="tab-pane fade" id="st-profiles"><div class="card mb-3"><div class="card-header"><h3 class="card-title">SNMP Profiles</h3><div class="ms-auto"><button class="btn btn-primary btn-sm" onclick="openSnmpModal()"><i class="ti ti-plus"></i> Add Profile</button></div></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Version</th><th>Community / User</th><th>Port</th><th>Actions</th></tr></thead><tbody id="snmp-tb"></tbody></table></div></div></div></div>');
+  var isAdmin=currentUser&&currentUser.role==='admin';
+  pHTML('<ul class="nav nav-tabs mb-3"><li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#st-general"><i class="ti ti-settings me-1"></i>General</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-notify"><i class="ti ti-bell me-1"></i>Notifications</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-retention"><i class="ti ti-database me-1"></i>Data Retention</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-profiles"><i class="ti ti-network me-1"></i>SNMP Profiles</a></li>'+((isAdmin)?'<li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-users"><i class="ti ti-users me-1"></i>Users</a></li><li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#st-clean"><i class="ti ti-trash me-1"></i>Data Cleanup</a></li>':'')+'</ul><div class="tab-content"><div class="tab-pane fade show active" id="st-general"><div class="card mb-3"><div class="card-header"><h3 class="card-title">General</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Ping Interval (ms)</label><input type="number" class="form-control" id="set-ping-int" value="5000"></div><div class="mb-3"><label class="form-label">SNMP Interval (ms)</label><input type="number" class="form-control" id="set-snmp-int" value="5000"></div><div class="mb-3"><label class="form-label">SNMP Timeout (ms)</label><input type="number" class="form-control" value="5000"></div><button class="btn btn-primary" id="btn-save-poll">Save</button></div></div></div><div class="tab-pane fade" id="st-notify"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Notifications</h3></div><div class="card-body"><div class="mb-3"><label class="form-label">Webhook URL</label><input type="text" class="form-control" id="set-webhook" placeholder="https://hooks..."></div><div class="mb-3"><label class="form-label">Telegram Bot Token</label><input type="text" class="form-control" id="set-tg-token" placeholder="Token" autocomplete="off"></div><div class="mb-3"><label class="form-label">Telegram Chat ID</label><input type="text" class="form-control" id="set-tg-chat" placeholder="Chat ID"></div><div class="mb-3"><label class="form-label">SMTP Host</label><input type="text" class="form-control" id="set-smtp-host" placeholder="smtp.example.com"></div><div class="row"><div class="col-md-6 mb-3"><label class="form-label">SMTP User</label><input type="text" class="form-control" id="set-smtp-user" placeholder="user" autocomplete="off"></div><div class="col-md-6 mb-3"><label class="form-label">SMTP Password</label><input type="password" class="form-control" id="set-smtp-pass" placeholder="password" autocomplete="off"></div></div><div class="mb-3"><label class="form-label">Alert Email To</label><input type="email" class="form-control" id="set-email-to" placeholder="admin@example.com"></div><button class="btn btn-primary" id="btn-save-notify">Save</button></div></div></div><div class="tab-pane fade" id="st-retention"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Data Retention</h3></div><div class="card-body"><div class="row"><div class="col-md-4 mb-3"><label class="form-label">Retain (days)</label><input type="number" class="form-control" id="set-retain" value="365"></div><div class="col-md-4 mb-3"><label class="form-label">Aggregate after (days)</label><input type="number" class="form-control" id="set-agg" value="30"></div></div><button class="btn btn-primary" id="btn-save-retention">Save</button></div></div></div><div class="tab-pane fade" id="st-profiles"><div class="card mb-3"><div class="card-header"><h3 class="card-title">SNMP Profiles</h3><div class="ms-auto">'+bOp('profile:manage','<button class="btn btn-primary btn-sm" onclick="openSnmpModal()"><i class="ti ti-plus"></i> Add Profile</button>')+'</div></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Name</th><th>Version</th><th>Community / User</th><th>Port</th><th>Actions</th></tr></thead><tbody id="snmp-tb"></tbody></table></div></div></div>'+((isAdmin)?'<div class="tab-pane fade" id="st-users"><div class="card mb-3"><div class="card-header"><h3 class="card-title">Users</h3><div class="ms-auto"><button class="btn btn-primary btn-sm" onclick="openUserModal()"><i class="ti ti-user-plus"></i> Add User</button></div></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Username</th><th>Role</th><th>Page Access</th><th>Operations</th><th>Created</th><th>Actions</th></tr></thead><tbody id="user-tb"></tbody></table></div></div></div><div class="tab-pane fade" id="st-clean"><div class="row row-deck mb-3"><div class="col-lg-6"><div class="card"><div class="card-body"><div class="d-flex align-items-center justify-content-between"><div><div class="fw-medium">Orphaned device data</div><div class="text-muted small">History, events, interfaces left by deleted devices</div></div><div class="text-end"><div class="fw-bold" id="clean-orphan-size">-</div><button class="btn btn-sm btn-warning mt-1" id="btn-clean-orphans" onclick="cleanRun(\'orphans\')">Clean orphaned</button></div></div></div></div></div><div class="col-lg-6"><div class="card"><div class="card-body"><div class="d-flex align-items-center justify-content-between"><div><div class="fw-medium">Old logs &amp; resolved alerts</div><div class="text-muted small">Older than <input type="number" id="clean-logs-days" value="30" style="width:64px" class="form-control d-inline-block"> days</div></div><button class="btn btn-sm btn-outline-danger" onclick="cleanOldLogs()">Clean old logs</button></div></div></div></div></div><div class="card mb-3"><div class="card-header"><h3 class="card-title">Storage by Category</h3></div><div class="card-body p-0"><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Category</th><th>Rows</th><th>Size</th><th>Actions</th></tr></thead><tbody id="clean-tb"></tbody></table></div></div></div><div class="card"><div class="card-header"><h3 class="card-title">Device-Specific Data</h3></div><div class="card-body"><div class="d-flex gap-2 align-items-center flex-wrap"><select class="form-select" id="clean-dev" style="width:280px"><option value="">Select device...</option></select><span class="text-muted small" id="clean-dev-info">Select a device to see its stored data.</span><button class="btn btn-sm btn-danger ms-auto" onclick="cleanDevice()">Clean device data</button></div></div></div></div>':'')+'</div></div>');
   loadSnmpProfiles();
+  loadUsers();
+  if(isAdmin)loadCleanup();
   loadPollSettings();
+  if(!canOp('settings:save')){['btn-save-poll','btn-save-notify','btn-save-retention'].forEach(function(id){var b=document.getElementById(id);if(b)b.disabled=true;});}
   document.getElementById('btn-save-poll').onclick=function(){
     var body={ping_interval_ms:parseInt(document.getElementById('set-ping-int').value),snmp_interval_ms:parseInt(document.getElementById('set-snmp-int').value)};
     if(!(body.ping_interval_ms>=1000&&body.ping_interval_ms<=3600000)||!(body.snmp_interval_ms>=1000&&body.snmp_interval_ms<=3600000)){toast('Intervals must be 1000-3600000 ms','critical');return;}
@@ -1361,7 +1395,16 @@ function loadPollSettings(){
     var n=s.notify||{};
     var map={'set-webhook':'webhook_url','set-tg-token':'telegram_token','set-tg-chat':'telegram_chat_id','set-smtp-host':'smtp_host','set-smtp-user':'smtp_user','set-smtp-pass':'smtp_pass','set-email-to':'alert_email_to'};
     Object.keys(map).forEach(function(id){var el=document.getElementById(id);if(el&&n[map[id]]!=null)el.value=n[map[id]];});
+    if(s.retention_days!=null){var ra=document.getElementById('set-retain');if(ra)ra.value=s.retention_days;}
+    if(s.aggregate_after_days!=null){var ag=document.getElementById('set-agg');if(ag)ag.value=s.aggregate_after_days;}
   }).catch(function(){});
+  var rb=document.getElementById('btn-save-retention');
+  if(rb)rb.onclick=function(){
+    var ret=parseInt(document.getElementById('set-retain').value);
+    var agg=parseInt(document.getElementById('set-agg').value);
+    if(!(ret>=1&&ret<=3650)||!(agg>=1&&agg<=365)){toast('Retain 1-3650 days, aggregate 1-365 days','critical');return;}
+    api('/settings',{method:'PUT',body:{retention_days:ret,aggregate_after_days:agg}}).then(function(){toast('Retention applied: raw data cleaned + aggregated','success');}).catch(function(){toast('Save failed','critical');});
+  };
   var sb=document.getElementById('btn-save-notify');
   if(sb)sb.onclick=function(){
     var g=function(id){var el=document.getElementById(id);return el?el.value:'';};
@@ -1375,7 +1418,7 @@ function loadSnmpProfiles(){
   api('/snmp-profiles').then(function(list){
     _snmpProfiles=list||[];
     var tb=document.getElementById('snmp-tb');if(!tb)return;
-    tb.innerHTML=_snmpProfiles.map(function(p){return '<tr><td class="fw-medium">'+esc(p.name)+'</td><td>v'+p.snmp_version+'</td><td><code>'+esc(p.snmp_version==='3'?(p.snmp_user||'-'):(p.snmp_community||'-'))+'</code></td><td>'+p.snmp_port+'</td><td><div class="btn-list flex-nowrap"><button class="btn btn-ghost btn-sm" onclick="openSnmpModal('+p.id+')"><i class="ti ti-pencil"></i></button><button class="btn btn-ghost btn-sm text-danger" onclick="delSnmpProfile('+p.id+')"><i class="ti ti-trash"></i></button></div></td></tr>';}).join('')||'<tr><td colspan="5" class="text-muted text-center">No profiles</td></tr>';
+    tb.innerHTML=_snmpProfiles.map(function(p){return '<tr><td class="fw-medium">'+esc(p.name)+'</td><td>v'+p.snmp_version+'</td><td><code>'+esc(p.snmp_version==='3'?(p.snmp_user||'-'):(p.snmp_community||'-'))+'</code></td><td>'+p.snmp_port+'</td><td><div class="btn-list flex-nowrap">'+bOp('profile:manage','<button class="btn btn-ghost btn-sm" onclick="openSnmpModal('+p.id+')"><i class="ti ti-pencil"></i></button>')+bOp('profile:manage','<button class="btn btn-ghost btn-sm text-danger" onclick="delSnmpProfile('+p.id+')"><i class="ti ti-trash"></i></button>')+'</div></td></tr>';}).join('')||'<tr><td colspan="5" class="text-muted text-center">No profiles</td></tr>';
   }).catch(function(){});
 }
 function snmpVerToggle(){var v=document.getElementById('sp-ver').value;document.getElementById('sp-v3-rows').style.display=v==='3'?'':'none';document.getElementById('sp-comm-row').style.display=v==='3'?'none':'';}
@@ -1403,6 +1446,155 @@ document.getElementById('btn-save-snmp').onclick=function(){
   var p=id?api('/snmp-profiles/'+id,{method:'PUT',body:data}):api('/snmp-profiles',{method:'POST',body:data});
   p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-snmp')).hide();toast(id?'Updated':'Created','success');loadSnmpProfiles();}).catch(function(e){toast('Error: duplicate name?','critical');});
 };
+
+// ═══ USERS (admin only) ═══
+var _usersCache=[];
+function loadUsers(){
+  if(!currentUser||currentUser.role!=='admin')return;
+  var tb=document.getElementById('user-tb');if(!tb)return;
+  api('/users').then(function(us){
+    _usersCache=us||[];
+    tb.innerHTML=_usersCache.map(function(u){
+      var self=String(u.id)===String(currentUser.id);
+      var pages=(u.permissions&&u.permissions.pages)||[];
+      var ops=(u.permissions&&u.permissions.ops)||[];
+      var pageTxt=(u.role==='admin')?'<span class="text-success">full access</span>':(pages.length?pages.map(function(k){return esc(k);}).join(', '):'<span class="text-muted">all pages</span>');
+      var opTxt2=(u.role==='admin')?'<span class="text-success">full access</span>':(ops.length?ops.length+' ops':'<span class="text-muted">read only</span>');
+      return '<tr><td class="fw-medium">'+esc(u.username)+(self?' <span class="badge bg-info">you</span>':'')+'</td><td><span class="badge bg-'+(u.role==='admin'?'danger':u.role==='readwrite'?'success':'secondary')+'">'+esc(u.role)+'</span></td><td class="small text-muted">'+pageTxt+'</td><td class="small text-muted">'+opTxt2+'</td><td class="small text-muted">'+(u.created_at?new Date(u.created_at).toLocaleDateString():'-')+'</td><td><div class="btn-list flex-nowrap"><button class="btn btn-ghost btn-sm" onclick="openUserModalById('+u.id+')"><i class="ti ti-pencil"></i></button>'+(self?'':'<button class="btn btn-ghost btn-sm text-danger" onclick="delUser('+u.id+')"><i class="ti ti-trash"></i></button>')+'</div></td></tr>';
+    }).join('')||'<tr><td colspan="6" class="text-muted text-center">No users</td></tr>';
+  }).catch(function(){});
+}
+function umMatrix(){
+  if(PERMS&&PERMS.pages&&PERMS.pages.length&&PERMS.ops&&PERMS.ops.length){umRenderMatrix();}
+  else{api('/auth/permissions').then(function(m){PERMS=m;umRenderMatrix();}).catch(function(){});}
+}
+function umRenderMatrix(){
+  var pc=document.getElementById('um-pages');if(pc)pc.innerHTML=(PERMS.pages||[]).map(function(p){return '<label class="form-check"><input class="form-check-input" type="checkbox" id="ump-'+p.key+'"><span class="form-check-label">'+esc(p.label)+'</span></label>';}).join('');
+  var oc=document.getElementById('um-ops');if(oc)oc.innerHTML=(PERMS.ops||[]).map(function(o){return '<label class="form-check"><input class="form-check-input" type="checkbox" id="umo-'+o.key+'"><span class="form-check-label">'+esc(o.label)+'</span></label>';}).join('');
+}
+function umTemplate(kind){
+  var allPages=(kind==='readonly'||kind==='readwrite'||kind==='all');
+  var allOps=(kind==='readwrite'||kind==='all');
+  document.querySelectorAll('#um-pages input').forEach(function(i){i.checked=allPages;});
+  document.querySelectorAll('#um-ops input').forEach(function(i){i.checked=allOps;});
+}
+function umGather(){
+  var pages=[],ops=[];
+  document.querySelectorAll('#um-pages input').forEach(function(i){if(i.checked)pages.push(i.id.slice(4));});
+  document.querySelectorAll('#um-ops input').forEach(function(i){if(i.checked)ops.push(i.id.slice(4));});
+  return {pages:pages,ops:ops};
+}
+function openUserModal(u){
+  umMatrix();
+  var uid=u?String(u.id):'';
+  document.getElementById('um-modal-title').textContent=u?'Edit User':'Add User';
+  document.getElementById('um-id').value=uid;
+  document.getElementById('um-user').value=u?u.username:'';
+  document.getElementById('um-pass').value='';
+  document.getElementById('um-role').value=u?(u.role||'readonly'):'readonly';
+  var selfEdit=uid&&uid===String(currentUser.id);
+  new bootstrap.Modal(document.getElementById('modal-user')).show();
+  var setMatrix=function(){
+    var pr=u&&u.permissions?u.permissions:null;
+    if(!pr&&!u)pr={pages:(PERMS.pages||[]).map(function(p){return p.key;}),ops:[]};
+    if(!pr&&u)pr={pages:[],ops:[]};
+    var L=document.querySelectorAll('#um-pages input');for(var i=0;i<L.length;i++)L[i].checked=(pr.pages||[]).indexOf(L[i].id.slice(4))>=0;
+    var M=document.querySelectorAll('#um-ops input');for(var i=0;i<M.length;i++)M[i].checked=(pr.ops||[]).indexOf(M[i].id.slice(4))>=0;
+    document.getElementById('um-user').disabled=selfEdit;
+    document.getElementById('um-role').disabled=selfEdit;
+    document.querySelectorAll('#um-pages input,#um-ops input').forEach(function(x){x.disabled=selfEdit;});
+    if(selfEdit)toast('You cannot change your own role or permissions','info');
+  };
+  if(PERMS&&PERMS.pages&&PERMS.pages.length){setMatrix();}else{setTimeout(setMatrix,300);}
+}
+function openUserModalById(id){
+  var u=null;for(var i=0;i<_usersCache.length;i++)if(String(_usersCache[i].id)===String(id))u=_usersCache[i];
+  openUserModal(u);
+}
+function saveUser(){
+  var id=document.getElementById('um-id').value;
+  var username=(document.getElementById('um-user').value||'').trim();
+  var password=document.getElementById('um-pass').value;
+  var role=document.getElementById('um-role').value;
+  if(!username&&!id){toast('Username required','critical');return;}
+  if(!id&&password.length<4){toast('Password must be at least 4 chars','critical');return;}
+  var body;
+  if(id&&String(id)===String(currentUser.id)){body={password:password};}
+  else{
+    body={role:role,permissions:umGather()};
+    if(!id){body.username=username;body.password=password;}
+    else if(password)body.password=password;
+  }
+  var p=id?api('/users/'+id,{method:'PUT',body:body}):api('/users',{method:'POST',body:body});
+  p.then(function(){bootstrap.Modal.getInstance(document.getElementById('modal-user')).hide();toast(id?'User updated':'User created','success');loadUsers();}).catch(function(e){toast(String(e.message||e||'Failed').slice(0,90),'critical');});
+}
+function delUser(id){
+  if(!confirm('Delete this user? This cannot be undone.'))return;
+  api('/users/'+id,{method:'DELETE'}).then(function(){toast('User deleted','success');loadUsers();}).catch(function(e){toast(String(e.message||e||'Delete failed').slice(0,90),'critical');});
+}
+document.getElementById('btn-save-user').onclick=saveUser;
+
+// ═══ DATA CLEANUP ═══
+function fmtBytes(b){
+  b=Number(b)||0;
+  if(b>=1073741824)return (b/1073741824).toFixed(2)+' GB';
+  if(b>=1048576)return (b/1048576).toFixed(1)+' MB';
+  if(b>=1024)return (b/1024).toFixed(1)+' KB';
+  return b+' B';
+}
+var _cleanace=null;
+function loadCleanup(){
+  api('/cleanup').then(function(d){
+    _cleanace=d;
+    var tb=document.getElementById('clean-tb');if(!tb)return;
+    var labels={'prune':'Prune old','counters':'Counters','all':'Clean'};
+    var rows=(d.categories||[]).map(function(c){
+      return '<tr><td class="fw-medium">'+esc(c.label)+'<div class="text-muted small">'+esc(c.desc)+'</div></td><td>'+(c.count||0).toLocaleString()+'</td><td>'+fmtBytes(c.size)+'</td><td><div class="btn-list flex-nowrap">'+(c.actions||[]).map(function(a){return '<button class="btn btn-sm btn-outline-danger" onclick="cleanRun(\''+c.key+'.'+a+'\')">'+labels[a]+'</button>';}).join('')+'</div></td></tr>';
+    }).join('');
+    tb.innerHTML=rows||'<tr><td colspan="4" class="text-muted text-center p-3">No data yet</td></tr>';
+    var o=d.orphans||{};
+    var oe=document.getElementById('clean-orphan-size');if(oe)oe.textContent=fmtBytes(o.size||0)+' / '+(o.rows||0).toLocaleString()+' rows';
+    var b1=document.getElementById('btn-clean-orphans');if(b1&&!(o.rows))b1.disabled=true;
+    var sel=document.getElementById('clean-dev');if(!sel)return;
+    sel.innerHTML='<option value="">Select device...</option>'+(d.devices||[]).map(function(v){return '<option value="'+v.id+'" data-rows="'+v.rows+'" data-size="'+v.size+'">'+esc(v.name)+' ('+esc(v.ip||'-')+')</option>';}).join('');
+    sel.onchange=function(){
+      var opt=sel.options[sel.selectedIndex];
+      var info=document.getElementById('clean-dev-info');
+      if(info)info.textContent=opt&&opt.value?('Stored data: '+(Number(opt.dataset.rows)||0).toLocaleString()+' rows / '+fmtBytes(opt.dataset.size||0)):'Select a device to see its stored data.';
+    };
+  }).catch(function(){});
+}
+function cleanRun(action){
+  if(action==='orphans'&&!confirm('Delete all orphaned device data (history, events, interfaces left by deleted devices)? This cannot be undone.'))return;
+  var days=null;
+  if(action.indexOf('.prune')>=0){
+    var key=action.slice(0,action.indexOf('.prune'));
+    var dfl={graphs:7,rates:30,events:30,alerts:30}[key]||30;
+    var v=prompt('Delete '+key+' older than how many days? (default '+dfl+')','');
+    if(v===null)return;
+    days=parseInt(v);
+    if(!(days>=1&&days<=3650)){toast('Days must be 1-3650','critical');return;}
+  }
+  if(action!=='orphans'){
+    var names={graphs:'graph history',rates:'link rate history',lasts:'live metrics',interfaces:'interface tables',events:'events',alerts:'alerts',rules:'alert rules',jobs:'discovery jobs',maps:'maps',devices:'devices and all their data'};
+    var nm=action.split('.')[0];
+    if(!confirm('Delete '+names[nm]+(action.indexOf('.prune')>=0?' older than '+days+' days':'')+'? This cannot be undone.'))return;
+  }
+  api('/cleanup',{method:'POST',body:{action:action,days:days}}).then(function(r){toast((r.message||'Done')+': '+(r.removed||0).toLocaleString()+' rows, '+fmtBytes(r.freed)+' freed','success');loadCleanup();}).catch(function(){toast('Cleanup failed','critical');});
+}
+function cleanOldLogs(){
+  var days=parseInt(document.getElementById('clean-logs-days').value);
+  if(!(days>=1&&days<=3650)){toast('Days must be 1-3650','critical');return;}
+  if(!confirm('Delete events and resolved/acknowledged alerts older than '+days+' days? This cannot be undone.'))return;
+  api('/cleanup',{method:'POST',body:{action:'old-logs',days:days}}).then(function(r){toast((r.message||'Done')+': '+(r.removed||0).toLocaleString()+' rows cleared','success');loadCleanup();}).catch(function(){toast('Cleanup failed','critical');});
+}
+function cleanDevice(){
+  var sel=document.getElementById('clean-dev');
+  var id=sel&&sel.value;if(!id){toast('Select a device first','warning');return;}
+  var nm=sel.options[sel.selectedIndex].textContent.trim();
+  if(!confirm('Delete all stored data for "'+nm+'"? This cannot be undone.'))return;
+  api('/cleanup',{method:'POST',body:{action:'device',device_id:id}}).then(function(r){toast((r.message||'Done')+': '+(r.removed||0).toLocaleString()+' rows removed','success');loadCleanup();loadDevices();}).catch(function(){toast('Cleanup failed','critical');});
+}
 
 // ═══ BOOT ═══
 initTheme();
